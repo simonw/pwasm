@@ -92,6 +92,14 @@ class GlobalInstance:
     mutable: bool
 
 
+@dataclass
+class TableInstance:
+    """Runtime table instance."""
+
+    elements: list[int | None]  # Function indices or None
+    max: int | None = None
+
+
 class ExportNamespace:
     """Namespace for accessing exported functions."""
 
@@ -128,6 +136,7 @@ class Instance:
     func_types: list[FuncType]
     memories: list[MemoryInstance]
     globals: list[GlobalInstance]
+    tables: list[TableInstance] = field(default_factory=list)
     imported_funcs: dict[int, Callable] = field(default_factory=dict)  # idx -> callable
     exports: ExportNamespace = field(init=False)
 
@@ -671,6 +680,35 @@ def execute_instruction(
         args = [stack.pop() for _ in range(n_params)][::-1]
         return ("call", func_idx, args)
 
+    elif op == "call_indirect":
+        type_idx, table_idx = instr.operand
+        # Pop the table index from stack
+        idx = stack.pop()
+        # Get function index from table
+        if table_idx >= len(instance.tables):
+            raise TrapError("undefined table")
+        table = instance.tables[table_idx]
+        if idx < 0 or idx >= len(table.elements):
+            raise TrapError("undefined element")
+        func_idx = table.elements[idx]
+        if func_idx is None:
+            raise TrapError("uninitialized element")
+        # Validate function type matches (compare actual types, not indices)
+        func = instance.funcs[func_idx]
+        if func is None:
+            raise TrapError("indirect call to imported function not supported")
+        expected_type = instance.func_types[type_idx]
+        actual_type = instance.func_types[func.type_idx]
+        if (
+            expected_type.params != actual_type.params
+            or expected_type.results != actual_type.results
+        ):
+            raise TrapError("indirect call type mismatch")
+        func_type = expected_type
+        n_params = len(func_type.params)
+        args = [stack.pop() for _ in range(n_params)][::-1]
+        return ("call", func_idx, args)
+
     else:
         raise TrapError(f"Unimplemented instruction: {op}")
 
@@ -813,12 +851,33 @@ def instantiate(
                 value = instr.operand
         globals_list.append(GlobalInstance(value, glob.type.mutable))
 
+    # Initialize tables
+    tables: list[TableInstance] = []
+    for table in module.tables:
+        elements: list[int | None] = [None] * table.limits.min
+        tables.append(TableInstance(elements, table.limits.max))
+
+    # Initialize element segments
+    for elem in module.elem:
+        if elem.table_idx >= 0 and tables:  # Active segment
+            table = tables[elem.table_idx]
+            # Evaluate offset expression (simplified: assume i32.const)
+            offset = 0
+            for instr in elem.offset:
+                if instr.opcode == "i32.const":
+                    offset = instr.operand
+                    break
+            # Copy function indices
+            for i, func_idx in enumerate(elem.init):
+                table.elements[offset + i] = func_idx
+
     instance = Instance(
         module=module,
         funcs=funcs,
         func_types=func_types,
         memories=memories,
         globals=globals_list,
+        tables=tables,
         imported_funcs=imported_funcs,
     )
 

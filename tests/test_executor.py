@@ -799,3 +799,49 @@ class TestImports:
 
         instance.exports.test(123)
         assert printed_values == [42, 123]
+
+
+class TestCallIndirect:
+    """Test call_indirect instruction."""
+
+    def test_call_indirect_basic(self):
+        """Test basic call_indirect through a table."""
+        import subprocess
+        import tempfile
+        from pathlib import Path
+
+        wat = """
+        (module
+          (type $t (func (result i32)))
+          (table 3 funcref)
+          (elem (i32.const 0) $f1 $f2 $f3)
+
+          (func $f1 (type $t) (i32.const 10))
+          (func $f2 (type $t) (i32.const 20))
+          (func $f3 (type $t) (i32.const 30))
+
+          (func (export "call_at") (param i32) (result i32)
+            (call_indirect (type $t) (local.get 0)))
+        )
+        """
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            wat_path = Path(tmpdir) / "test.wat"
+            wasm_path = Path(tmpdir) / "test.wasm"
+            wat_path.write_text(wat)
+
+            result = subprocess.run(
+                ["wat2wasm", str(wat_path), "-o", str(wasm_path)],
+                capture_output=True,
+            )
+            if result.returncode != 0:
+                pytest.skip("wat2wasm not available")
+
+            wasm = wasm_path.read_bytes()
+
+        module = decode_module(wasm)
+        instance = instantiate(module)
+
+        assert instance.exports.call_at(0) == 10
+        assert instance.exports.call_at(1) == 20
+        assert instance.exports.call_at(2) == 30
