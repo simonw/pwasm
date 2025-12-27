@@ -45,6 +45,7 @@ class Label:
     arity: int  # Number of values on stack when branching
     target: int  # Instruction index to jump to
     is_loop: bool = False  # True if this is a loop label
+    stack_height: int = 0  # Stack height when block was entered
 
 
 @dataclass
@@ -185,7 +186,9 @@ def execute_function(instance: Instance, func_idx: int, args: list[Any]) -> Any:
     labels: list[Label] = []
 
     # Add implicit function-level label
-    labels.append(Label(arity=len(func_type.results), target=len(func.body) - 1))
+    labels.append(
+        Label(arity=len(func_type.results), target=len(func.body) - 1, stack_height=0)
+    )
 
     ip = 0  # Instruction pointer
     body = func.body
@@ -581,14 +584,32 @@ def execute_instruction(
         blocktype = instr.operand
         arity = 0 if blocktype == () else 1 if isinstance(blocktype, tuple) else 0
         end_ip = find_end(body, ip)
-        labels.append(Label(arity=arity, target=end_ip))
+        labels.append(Label(arity=arity, target=end_ip, stack_height=len(stack)))
 
     elif op == "loop":
         # Loop label points to start of loop
         blocktype = instr.operand
-        arity = 0  # Loop takes no values on branch (jumps to start)
+        # For loops, arity is the number of PARAMETERS (values needed when branching back)
+        if blocktype == ():
+            arity = 0
+        elif isinstance(blocktype, tuple):
+            arity = 1  # Single value type like ('i32',)
+        elif isinstance(blocktype, int):
+            # Type index - get parameters count from function type
+            func_type = instance.func_types[blocktype]
+            arity = len(func_type.params)
+        else:
+            arity = 0
         end_ip = find_end(body, ip)
-        labels.append(Label(arity=arity, target=ip - 1, is_loop=True))
+        # For loops, stack_height is BEFORE the parameters (they're consumed on entry)
+        labels.append(
+            Label(
+                arity=arity,
+                target=ip - 1,
+                is_loop=True,
+                stack_height=len(stack) - arity,
+            )
+        )
 
     elif op == "if":
         condition = stack.pop()
@@ -600,10 +621,10 @@ def execute_instruction(
 
         if condition:
             # Execute then branch
-            labels.append(Label(arity=arity, target=end_ip))
+            labels.append(Label(arity=arity, target=end_ip, stack_height=len(stack)))
         else:
             # Skip to else or end
-            labels.append(Label(arity=arity, target=end_ip))
+            labels.append(Label(arity=arity, target=end_ip, stack_height=len(stack)))
             if else_ip is not None:
                 # Branch past the else instruction to execute else body
                 return ("branch", else_ip + 1)
@@ -669,8 +690,19 @@ def do_branch(stack: list[Any], labels: list[Label], depth: int) -> tuple:
     for _ in range(depth + 1):
         labels.pop()
 
-    # For loops, we re-enter the loop (no stack adjustment needed for arity 0)
-    # For blocks, we exit with arity values on stack
+    # Restore stack: keep only arity values on top, discard down to stack_height
+    if label.arity > 0:
+        # Save the result values
+        result_values = stack[-label.arity :]
+        # Restore stack to the height when block was entered
+        del stack[label.stack_height :]
+        # Push back the result values
+        stack.extend(result_values)
+    else:
+        # No result values, just restore stack height
+        del stack[label.stack_height :]
+
+    # For loops, we re-enter the loop
     if label.is_loop:
         # Re-add the loop label for the next iteration
         labels.append(label)
