@@ -6,7 +6,7 @@ readme = "README.md"
 authors = [
     { name = "Simon Willison", email = "swillison@gmail.com" }
 ]
-requires-python = ">=3.14"
+requires-python = ">=3.10"
 dependencies = []
 
 [build-system]
@@ -16,4 +16,5 @@ build-backend = "uv_build"
 [dependency-groups]
 dev = [
     "pytest>=9.0.2",
+    "black>=24.0.0",
 ]
