@@ -461,3 +461,150 @@ class TestMemory:
         # Increment again
         instance.exports.inc()
         assert instance.exports.get() == 67
+
+    def test_i32_load_and_store(self):
+        """Test 32-bit memory load and store using wast2json generated binary."""
+        import subprocess
+        import tempfile
+        from pathlib import Path
+
+        wat = """
+        (module
+          (memory 1)
+          (func (export "get") (result i32)
+            (i32.load (i32.const 0)))
+          (func (export "set") (param i32)
+            (i32.store (i32.const 0) (local.get 0)))
+        )
+        """
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            wat_path = Path(tmpdir) / "test.wat"
+            wasm_path = Path(tmpdir) / "test.wasm"
+            wat_path.write_text(wat)
+
+            result = subprocess.run(
+                ["wat2wasm", str(wat_path), "-o", str(wasm_path)],
+                capture_output=True,
+            )
+            if result.returncode != 0:
+                pytest.skip("wat2wasm not available")
+
+            wasm = wasm_path.read_bytes()
+
+        module = decode_module(wasm)
+        instance = instantiate(module)
+
+        # Initially 0
+        assert instance.exports.get() == 0
+
+        # Store and retrieve
+        instance.exports.set(0x12345678)
+        assert instance.exports.get() == 0x12345678
+
+        # Store negative (as unsigned)
+        instance.exports.set(-1)
+        # -1 as u32 is 0xFFFFFFFF, as signed i32 is -1
+        assert instance.exports.get() == -1
+
+
+class TestI64:
+    """Test i64 operations."""
+
+    def test_i64_factorial(self):
+        """Test i64 operations via factorial calculation."""
+        import subprocess
+        import tempfile
+        from pathlib import Path
+
+        wat = """
+        (module
+          (func (export "fac") (param i64) (result i64)
+            (local i64)
+            (local.set 1 (i64.const 1))
+            (block
+              (loop
+                (br_if 1 (i64.eqz (local.get 0)))
+                (local.set 1 (i64.mul (local.get 1) (local.get 0)))
+                (local.set 0 (i64.sub (local.get 0) (i64.const 1)))
+                (br 0)
+              )
+            )
+            (local.get 1)
+          )
+        )
+        """
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            wat_path = Path(tmpdir) / "test.wat"
+            wasm_path = Path(tmpdir) / "test.wasm"
+            wat_path.write_text(wat)
+
+            result = subprocess.run(
+                ["wat2wasm", str(wat_path), "-o", str(wasm_path)],
+                capture_output=True,
+            )
+            if result.returncode != 0:
+                pytest.skip("wat2wasm not available")
+
+            wasm = wasm_path.read_bytes()
+
+        module = decode_module(wasm)
+        instance = instantiate(module)
+
+        assert instance.exports.fac(0) == 1
+        assert instance.exports.fac(1) == 1
+        assert instance.exports.fac(5) == 120
+        assert instance.exports.fac(10) == 3628800
+
+
+class TestMemoryOps:
+    """Test memory.size and memory.grow."""
+
+    def test_memory_size_and_grow(self):
+        """Test memory.size and memory.grow instructions."""
+        import subprocess
+        import tempfile
+        from pathlib import Path
+
+        wat = """
+        (module
+          (memory 1 4)
+          (func (export "size") (result i32)
+            (memory.size))
+          (func (export "grow") (param i32) (result i32)
+            (memory.grow (local.get 0)))
+        )
+        """
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            wat_path = Path(tmpdir) / "test.wat"
+            wasm_path = Path(tmpdir) / "test.wasm"
+            wat_path.write_text(wat)
+
+            result = subprocess.run(
+                ["wat2wasm", str(wat_path), "-o", str(wasm_path)],
+                capture_output=True,
+            )
+            if result.returncode != 0:
+                pytest.skip("wat2wasm not available")
+
+            wasm = wasm_path.read_bytes()
+
+        module = decode_module(wasm)
+        instance = instantiate(module)
+
+        # Initial size is 1 page
+        assert instance.exports.size() == 1
+
+        # Grow by 1 page, returns old size (1)
+        assert instance.exports.grow(1) == 1
+        assert instance.exports.size() == 2
+
+        # Grow by 1 more
+        assert instance.exports.grow(1) == 2
+        assert instance.exports.size() == 3
+
+        # Try to grow beyond max (4), should return -1
+        assert instance.exports.grow(2) == -1
+        assert instance.exports.size() == 3  # unchanged

@@ -392,7 +392,62 @@ def execute_instruction(
         b, a = stack.pop(), stack.pop()
         stack.append(1 if to_u32(a) >= to_u32(b) else 0)
 
+    # i64 arithmetic
+    elif op == "i64.add":
+        b, a = stack.pop(), stack.pop()
+        stack.append(to_i64(a + b))
+    elif op == "i64.sub":
+        b, a = stack.pop(), stack.pop()
+        stack.append(to_i64(a - b))
+    elif op == "i64.mul":
+        b, a = stack.pop(), stack.pop()
+        stack.append(to_i64(a * b))
+
+    # i64 comparison
+    elif op == "i64.eqz":
+        stack.append(1 if stack.pop() == 0 else 0)
+    elif op == "i64.eq":
+        b, a = stack.pop(), stack.pop()
+        stack.append(1 if to_i64(a) == to_i64(b) else 0)
+    elif op == "i64.ne":
+        b, a = stack.pop(), stack.pop()
+        stack.append(1 if to_i64(a) != to_i64(b) else 0)
+    elif op == "i64.lt_s":
+        b, a = stack.pop(), stack.pop()
+        stack.append(1 if to_i64(a) < to_i64(b) else 0)
+    elif op == "i64.lt_u":
+        b, a = stack.pop(), stack.pop()
+        stack.append(1 if to_u64(a) < to_u64(b) else 0)
+    elif op == "i64.gt_s":
+        b, a = stack.pop(), stack.pop()
+        stack.append(1 if to_i64(a) > to_i64(b) else 0)
+    elif op == "i64.gt_u":
+        b, a = stack.pop(), stack.pop()
+        stack.append(1 if to_u64(a) > to_u64(b) else 0)
+    elif op == "i64.le_s":
+        b, a = stack.pop(), stack.pop()
+        stack.append(1 if to_i64(a) <= to_i64(b) else 0)
+    elif op == "i64.le_u":
+        b, a = stack.pop(), stack.pop()
+        stack.append(1 if to_u64(a) <= to_u64(b) else 0)
+    elif op == "i64.ge_s":
+        b, a = stack.pop(), stack.pop()
+        stack.append(1 if to_i64(a) >= to_i64(b) else 0)
+    elif op == "i64.ge_u":
+        b, a = stack.pop(), stack.pop()
+        stack.append(1 if to_u64(a) >= to_u64(b) else 0)
+
     # Memory load operations
+    elif op == "i32.load":
+        align, offset = instr.operand
+        addr = stack.pop()
+        ea = addr + offset
+        mem = instance.memories[0].data
+        if ea < 0 or ea + 4 > len(mem):
+            raise TrapError("out of bounds memory access")
+        val = int.from_bytes(mem[ea : ea + 4], "little", signed=True)
+        stack.append(val)
+
     elif op == "i32.load8_u":
         align, offset = instr.operand
         addr = stack.pop()
@@ -413,6 +468,16 @@ def execute_instruction(
         stack.append(val)
 
     # Memory store operations
+    elif op == "i32.store":
+        align, offset = instr.operand
+        val = stack.pop()
+        addr = stack.pop()
+        ea = addr + offset
+        mem = instance.memories[0].data
+        if ea < 0 or ea + 4 > len(mem):
+            raise TrapError("out of bounds memory access")
+        mem[ea : ea + 4] = (val & MASK_32).to_bytes(4, "little")
+
     elif op == "i32.store8":
         align, offset = instr.operand
         val = stack.pop()
@@ -421,6 +486,17 @@ def execute_instruction(
         if ea < 0 or ea >= len(instance.memories[0].data):
             raise TrapError("out of bounds memory access")
         instance.memories[0].data[ea] = val & 0xFF
+
+    # Memory size/grow
+    elif op == "memory.size":
+        mem = instance.memories[0]
+        stack.append(len(mem.data) // mem.PAGE_SIZE)
+
+    elif op == "memory.grow":
+        delta = stack.pop()
+        mem = instance.memories[0]
+        result = mem.grow(delta)
+        stack.append(result)
 
     # Control flow
     elif op == "nop":
