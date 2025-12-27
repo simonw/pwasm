@@ -344,3 +344,120 @@ class TestSelect:
         instance = instantiate(module)
         assert instance.exports.sel(1, 99) == 1  # condition=1, select val1
         assert instance.exports.sel(0, 99) == 99  # condition=0, select val2
+
+
+class TestMemory:
+    """Test memory load/store instructions."""
+
+    def test_i32_load8_u_and_store8(self):
+        """Test loading and storing bytes in memory.
+
+        Creates a module with:
+        - Memory initialized with "A" (65) at offset 0
+        - get() function: load byte at offset 0
+        - inc() function: load byte, add 1, store back
+        """
+        wasm = bytes(
+            [
+                0x00,
+                0x61,
+                0x73,
+                0x6D,
+                0x01,
+                0x00,
+                0x00,
+                0x00,  # magic + version
+                # Type section: 2 types
+                0x01,  # section id
+                0x08,  # size = 8 (1 + 4 + 3)
+                0x02,  # count = 2
+                0x60,
+                0x00,
+                0x01,
+                0x7F,  # type 0: () -> i32
+                0x60,
+                0x00,
+                0x00,  # type 1: () -> ()
+                # Function section: 2 funcs
+                0x03,  # section id
+                0x03,  # size = 3
+                0x02,  # count = 2
+                0x00,  # func 0: type 0
+                0x01,  # func 1: type 1
+                # Memory section: 1 memory, min=1 page
+                0x05,  # section id
+                0x03,  # size = 3
+                0x01,  # count = 1
+                0x00,  # flags (no max)
+                0x01,  # min = 1 page
+                # Export section: 2 exports
+                0x07,  # section id
+                0x0D,  # size = 13 (1 + 6 + 6)
+                0x02,  # count = 2
+                0x03,
+                0x67,
+                0x65,
+                0x74,  # "get"
+                0x00,
+                0x00,  # func idx 0
+                0x03,
+                0x69,
+                0x6E,
+                0x63,  # "inc"
+                0x00,
+                0x01,  # func idx 1
+                # Code section
+                0x0A,  # section id
+                0x19,  # size = 25 (1 + 8 + 16)
+                0x02,  # count = 2
+                # func 0 (get): body_size=7 (1+2+3+1)
+                0x07,
+                0x00,  # 0 locals
+                0x41,
+                0x00,  # i32.const 0
+                0x2D,
+                0x00,
+                0x00,  # i32.load8_u align=0 offset=0
+                0x0B,  # end
+                # func 1 (inc): body_size=15 (1+2+2+3+2+1+3+1)
+                0x0F,
+                0x00,  # 0 locals
+                0x41,
+                0x00,  # i32.const 0 (store addr)
+                0x41,
+                0x00,  # i32.const 0 (load addr)
+                0x2D,
+                0x00,
+                0x00,  # i32.load8_u align=0 offset=0
+                0x41,
+                0x01,  # i32.const 1
+                0x6A,  # i32.add
+                0x3A,
+                0x00,
+                0x00,  # i32.store8 align=0 offset=0
+                0x0B,  # end
+                # Data section: init memory[0] = 'A' (65)
+                0x0B,  # section id
+                0x07,  # size = 7
+                0x01,  # count = 1
+                0x00,  # flags = active, memory 0
+                0x41,
+                0x00,
+                0x0B,  # offset expr: i32.const 0, end
+                0x01,  # data length = 1
+                0x41,  # 'A' = 65
+            ]
+        )
+        module = decode_module(wasm)
+        instance = instantiate(module)
+
+        # Initial value should be 'A' = 65
+        assert instance.exports.get() == 65
+
+        # Increment once
+        instance.exports.inc()
+        assert instance.exports.get() == 66
+
+        # Increment again
+        instance.exports.inc()
+        assert instance.exports.get() == 67

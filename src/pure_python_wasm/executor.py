@@ -392,6 +392,36 @@ def execute_instruction(
         b, a = stack.pop(), stack.pop()
         stack.append(1 if to_u32(a) >= to_u32(b) else 0)
 
+    # Memory load operations
+    elif op == "i32.load8_u":
+        align, offset = instr.operand
+        addr = stack.pop()
+        ea = addr + offset  # effective address
+        if ea < 0 or ea >= len(instance.memories[0].data):
+            raise TrapError("out of bounds memory access")
+        stack.append(instance.memories[0].data[ea])
+
+    elif op == "i32.load8_s":
+        align, offset = instr.operand
+        addr = stack.pop()
+        ea = addr + offset
+        if ea < 0 or ea >= len(instance.memories[0].data):
+            raise TrapError("out of bounds memory access")
+        val = instance.memories[0].data[ea]
+        if val >= 128:
+            val -= 256
+        stack.append(val)
+
+    # Memory store operations
+    elif op == "i32.store8":
+        align, offset = instr.operand
+        val = stack.pop()
+        addr = stack.pop()
+        ea = addr + offset
+        if ea < 0 or ea >= len(instance.memories[0].data):
+            raise TrapError("out of bounds memory access")
+        instance.memories[0].data[ea] = val & 0xFF
+
     # Control flow
     elif op == "nop":
         pass
