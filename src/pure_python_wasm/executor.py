@@ -1062,8 +1062,8 @@ def execute_instruction(
                 # Branch past the else instruction to execute else body
                 return ("branch", else_ip + 1)
             else:
-                # No else branch, skip to end
-                return ("branch", end_ip + 1)
+                # No else branch, skip to end instruction to pop the label
+                return ("branch", end_ip)
 
     elif op == "else":
         # When we hit else during normal execution, skip to end
@@ -1144,7 +1144,7 @@ def do_branch(stack: list[Any], labels: list[Label], depth: int) -> tuple:
     # Count from innermost label
     label_idx = len(labels) - 1 - depth
     if label_idx < 0:
-        raise TrapError(f"Invalid branch depth: {depth}")
+        raise TrapError(f"Invalid branch depth: {depth} (have {len(labels)} labels)")
 
     label = labels[label_idx]
 
@@ -1169,7 +1169,7 @@ def do_branch(stack: list[Any], labels: list[Label], depth: int) -> tuple:
         # Re-add the loop label for the next iteration
         labels.append(label)
 
-    return ("branch", label.target + 1 if not label.is_loop else label.target + 1)
+    return ("branch", label.target + 1)
 
 
 def precompute_jump_targets(
