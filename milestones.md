@@ -3,66 +3,66 @@
 ## Milestone 1: Foundation & Binary Decoder
 *Goal: Parse WASM binary format into an AST*
 
-- [ ] Set up project structure and error types
-- [ ] Implement LEB128 encoding/decoding (unsigned and signed)
-- [ ] Implement binary reader with position tracking
-- [ ] Parse WASM magic number and version
-- [ ] Parse type section (function signatures)
-- [ ] Parse function section (type indices)
-- [ ] Parse export section
-- [ ] Parse code section (function bodies with instructions)
-- [ ] Parse import section
-- [ ] Parse memory section
-- [ ] Parse global section
-- [ ] Parse table section
-- [ ] Parse data section
-- [ ] Parse element section
-- [ ] Parse start section
-- [ ] Parse custom sections (for names, etc.)
+- [x] Set up project structure and error types
+- [x] Implement LEB128 encoding/decoding (unsigned and signed)
+- [x] Implement binary reader with position tracking
+- [x] Parse WASM magic number and version
+- [x] Parse type section (function signatures)
+- [x] Parse function section (type indices)
+- [x] Parse export section
+- [x] Parse code section (function bodies with instructions)
+- [x] Parse import section
+- [x] Parse memory section
+- [x] Parse global section
+- [x] Parse table section
+- [x] Parse data section
+- [x] Parse element section
+- [x] Parse start section
+- [x] Parse custom sections (for names, etc.)
 
 ## Milestone 2: Core Types & Module Structure
 *Goal: Represent decoded modules in Python*
 
-- [ ] Define value types (i32, i64, f32, f64)
-- [ ] Define reference types (funcref, externref)
-- [ ] Implement function type representation
-- [ ] Implement limits (for memory/tables)
-- [ ] Implement global type (valtype + mutability)
-- [ ] Implement module structure with all sections
-- [ ] Implement instruction AST representation
-- [ ] Define all opcodes with their immediates
+- [x] Define value types (i32, i64, f32, f64)
+- [x] Define reference types (funcref, externref)
+- [x] Implement function type representation
+- [x] Implement limits (for memory/tables)
+- [x] Implement global type (valtype + mutability)
+- [x] Implement module structure with all sections
+- [x] Implement instruction AST representation
+- [x] Define all opcodes with their immediates
 
 ## Milestone 3: Minimal Interpreter (i32 only)
 *Goal: Execute simple functions with i32 arithmetic*
 
-- [ ] Implement value stack
-- [ ] Implement call stack (frames)
-- [ ] Implement local variable storage
-- [ ] Execute `i32.const`
-- [ ] Execute `local.get`, `local.set`, `local.tee`
-- [ ] Execute `i32.add`, `i32.sub`, `i32.mul`
-- [ ] Execute `i32.div_s`, `i32.div_u`, `i32.rem_s`, `i32.rem_u`
-- [ ] Execute `i32.and`, `i32.or`, `i32.xor`
-- [ ] Execute `i32.shl`, `i32.shr_s`, `i32.shr_u`, `i32.rotl`, `i32.rotr`
-- [ ] Execute `i32.clz`, `i32.ctz`, `i32.popcnt`
-- [ ] Execute `i32.eqz`, `i32.eq`, `i32.ne`
-- [ ] Execute `i32.lt_s`, `i32.lt_u`, `i32.gt_s`, `i32.gt_u`
-- [ ] Execute `i32.le_s`, `i32.le_u`, `i32.ge_s`, `i32.ge_u`
-- [ ] Execute `drop`, `select`
-- [ ] Execute `nop`, `unreachable`
-- [ ] Execute `return`
-- [ ] Execute `call` (direct function calls)
+- [x] Implement value stack
+- [x] Implement call stack (frames)
+- [x] Implement local variable storage
+- [x] Execute `i32.const`
+- [x] Execute `local.get`, `local.set`, `local.tee`
+- [x] Execute `i32.add`, `i32.sub`, `i32.mul`
+- [x] Execute `i32.div_s`, `i32.div_u`, `i32.rem_s`, `i32.rem_u`
+- [x] Execute `i32.and`, `i32.or`, `i32.xor`
+- [x] Execute `i32.shl`, `i32.shr_s`, `i32.shr_u`, `i32.rotl`, `i32.rotr`
+- [x] Execute `i32.clz`, `i32.ctz`, `i32.popcnt`
+- [x] Execute `i32.eqz`, `i32.eq`, `i32.ne`
+- [x] Execute `i32.lt_s`, `i32.lt_u`, `i32.gt_s`, `i32.gt_u`
+- [x] Execute `i32.le_s`, `i32.le_u`, `i32.ge_s`, `i32.ge_u`
+- [x] Execute `drop`, `select`
+- [x] Execute `nop`, `unreachable`
+- [x] Execute `return`
+- [x] Execute `call` (direct function calls)
 
 ## Milestone 4: Control Flow
 *Goal: Handle blocks, loops, branches*
 
-- [ ] Implement label stack for structured control flow
-- [ ] Execute `block` instruction
-- [ ] Execute `loop` instruction
-- [ ] Execute `if`/`else`/`end`
-- [ ] Execute `br` (unconditional branch)
-- [ ] Execute `br_if` (conditional branch)
-- [ ] Execute `br_table` (branch table)
+- [x] Implement label stack for structured control flow
+- [x] Execute `block` instruction
+- [x] Execute `loop` instruction
+- [x] Execute `if`/`else`/`end`
+- [x] Execute `br` (unconditional branch)
+- [x] Execute `br_if` (conditional branch)
+- [x] Execute `br_table` (branch table)
 - [ ] Handle multi-value block results
 
 ## Milestone 5: i64 and Integer Conversions
