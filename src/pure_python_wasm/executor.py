@@ -210,13 +210,16 @@ def execute_function(instance: Instance, func_idx: int, args: list[Any]) -> Any:
     ip = 0  # Instruction pointer
     body = func.body
 
+    # Get cached jump targets (or compute them)
+    jump_targets = get_jump_targets(func, body)
+
     while ip < len(body):
         instr = body[ip]
         ip += 1
 
         # Execute instruction
         result = execute_instruction(
-            instr, stack, labels, locals_list, instance, body, ip
+            instr, stack, labels, locals_list, instance, body, ip, jump_targets
         )
 
         if result is not None:
@@ -252,6 +255,7 @@ def execute_instruction(
     instance: Instance,
     body: list[Instruction],
     ip: int,
+    jump_targets: dict | None = None,
 ) -> tuple | None:
     """Execute a single instruction. Returns control flow action or None."""
     op = instr.opcode
@@ -1012,7 +1016,7 @@ def execute_instruction(
         # Find matching end
         blocktype = instr.operand
         arity = 0 if blocktype == () else 1 if isinstance(blocktype, tuple) else 0
-        end_ip = find_end(body, ip)
+        end_ip = find_end(body, ip, jump_targets)
         labels.append(Label(arity=arity, target=end_ip, stack_height=len(stack)))
 
     elif op == "loop":
@@ -1029,7 +1033,7 @@ def execute_instruction(
             arity = len(func_type.params)
         else:
             arity = 0
-        end_ip = find_end(body, ip)
+        end_ip = find_end(body, ip, jump_targets)
         # For loops, stack_height is BEFORE the parameters (they're consumed on entry)
         labels.append(
             Label(
@@ -1046,7 +1050,7 @@ def execute_instruction(
         arity = 0 if blocktype == () else 1 if isinstance(blocktype, tuple) else 0
 
         # Find else and end
-        else_ip, end_ip = find_else_end(body, ip)
+        else_ip, end_ip = find_else_end(body, ip, jump_targets)
 
         if condition:
             # Execute then branch
@@ -1168,11 +1172,58 @@ def do_branch(stack: list[Any], labels: list[Label], depth: int) -> tuple:
     return ("branch", label.target + 1 if not label.is_loop else label.target + 1)
 
 
-def find_end(body: list[Instruction], start_ip: int) -> int:
+def precompute_jump_targets(
+    body: list[Instruction],
+) -> dict[int, tuple[int | None, int]]:
+    """Precompute jump targets for all block/loop/if instructions.
+
+    Returns a dict mapping instruction index to (else_ip, end_ip).
+    For block/loop, else_ip is None. For if, else_ip may be set.
+    """
+    targets: dict[int, tuple[int | None, int]] = {}
+    # Stack of (start_ip, is_if, else_ip)
+    stack: list[tuple[int, bool, int | None]] = []
+    body_len = len(body)
+
+    for ip in range(body_len):
+        op = body[ip].opcode
+        if op in ("block", "loop"):
+            stack.append((ip, False, None))
+        elif op == "if":
+            stack.append((ip, True, None))
+        elif op == "else":
+            # Record else position for the innermost if
+            if stack and stack[-1][1]:  # is_if
+                start_ip, _, _ = stack[-1]
+                stack[-1] = (start_ip, True, ip)
+        elif op == "end":
+            if stack:
+                start_ip, is_if, else_ip = stack.pop()
+                targets[start_ip] = (else_ip, ip)
+
+    return targets
+
+
+def get_jump_targets(
+    func: Function, body: list[Instruction]
+) -> dict[int, tuple[int | None, int]]:
+    """Get jump targets for a function, computing and caching if needed."""
+    if func.jump_targets is None:
+        func.jump_targets = precompute_jump_targets(body)
+    return func.jump_targets
+
+
+def find_end(
+    body: list[Instruction], start_ip: int, jump_targets: dict | None = None
+) -> int:
     """Find the matching 'end' instruction for a block/loop starting at start_ip."""
+    if jump_targets is not None and start_ip in jump_targets:
+        return jump_targets[start_ip][1]
+    # Fallback to scanning
     depth = 1
     ip = start_ip
-    while ip < len(body):
+    body_len = len(body)
+    while ip < body_len:
         op = body[ip].opcode
         if op in ("block", "loop", "if"):
             depth += 1
@@ -1184,12 +1235,18 @@ def find_end(body: list[Instruction], start_ip: int) -> int:
     raise TrapError("No matching end found")
 
 
-def find_else_end(body: list[Instruction], start_ip: int) -> tuple[int | None, int]:
+def find_else_end(
+    body: list[Instruction], start_ip: int, jump_targets: dict | None = None
+) -> tuple[int | None, int]:
     """Find 'else' and 'end' for an if starting at start_ip."""
+    if jump_targets is not None and start_ip in jump_targets:
+        return jump_targets[start_ip]
+    # Fallback to scanning
     depth = 1
     ip = start_ip
     else_ip = None
-    while ip < len(body):
+    body_len = len(body)
+    while ip < body_len:
         op = body[ip].opcode
         if op in ("block", "loop", "if"):
             depth += 1

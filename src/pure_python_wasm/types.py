@@ -106,6 +106,9 @@ class Function:
     type_idx: int
     locals: tuple[ValType, ...]
     body: list[Instruction]
+    jump_targets: dict[int, tuple[int | None, int]] = (
+        None  # Cache: ip -> (else_ip, end_ip)
+    )
 
 
 @dataclass
