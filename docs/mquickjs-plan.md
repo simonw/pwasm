@@ -2,13 +2,27 @@
 
 This document outlines the steps needed to run MicroQuickJS (Emscripten-compiled JavaScript engine) in pure-python-wasm.
 
-## Current Status
+## Current Status (Updated)
 
-- **WASM decoding**: Working (228KB module, 273 functions)
-- **Instantiation**: Working (all 124 opcodes implemented)
-- **Execution**: Fails during `sandbox_init()` due to missing Emscripten runtime support
+- **WASM decoding**: ✅ Working (230KB module, 281 functions, 17 imports)
+- **Tag section support**: ✅ Added support for exception handling proposal tag section
+- **Instantiation**: ✅ Working with full Emscripten runtime imports
+- **Emscripten Runtime**: ✅ Implemented in `tests/test_mquickjs.py`:
+  - `invoke_*` functions (iii, iiii, iiiii, vi, vii, viii, viiiii, viiiiii)
+  - `setTempRet0` / `getTempRet0` for 64-bit returns
+  - `_emscripten_throw_longjmp` with Python exception pattern
+  - Basic WASI stubs (args_sizes_get, args_get, proc_exit, fd_close, fd_write, fd_seek)
+- **Execution**: ⚠️ **Performance-limited** - Pure Python interpreter is too slow
+  - Module instantiation: ~0.3s ✅
+  - Function execution: Prohibitively slow for MicroQuickJS's complex initialization
 
 ## The Problem
+
+**Primary blocker**: Pure Python interpretation is too slow for production use. MicroQuickJS has complex initialization code that would take hours/days to execute in pure Python.
+
+**Secondary issue**: MicroQuickJS uses setjmp/longjmp for error handling. While we've implemented the Emscripten pattern, the slow execution means we can't validate it works end-to-end.
+
+## Emscripten setjmp/longjmp Pattern
 
 MicroQuickJS is compiled with Emscripten and uses setjmp/longjmp for error handling. Emscripten implements this pattern through:
 

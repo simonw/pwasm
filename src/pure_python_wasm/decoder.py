@@ -43,6 +43,7 @@ SECTION_ELEMENT = 9
 SECTION_CODE = 10
 SECTION_DATA = 11
 SECTION_DATA_COUNT = 12
+SECTION_TAG = 13  # Exception handling proposal
 
 # Block type encoding
 BLOCK_TYPE_EMPTY = 0x40
@@ -637,6 +638,10 @@ def decode_section(reader: BinaryReader, module: Module) -> None:
     elif section_id == SECTION_DATA_COUNT:
         # Data count section (for bulk memory)
         _ = decode_unsigned_leb128(section_reader)  # Just read and ignore for now
+    elif section_id == SECTION_TAG:
+        # Tag section (for exception handling proposal)
+        # Skip for now - would need to decode tag types for try/catch support
+        pass
     else:
         raise DecodeError(f"Unknown section id: {section_id}")
 

@@ -11,7 +11,7 @@ from .decoder import (
 )
 from .errors import WasmError, DecodeError, ValidationError, TrapError, LinkError
 from .types import Module, FuncType, Function, Export, Import, Instruction
-from .executor import instantiate, Instance
+from .executor import instantiate, execute_function, Instance
 
 __version__ = "0.1.0"
 
@@ -19,6 +19,7 @@ __all__ = [
     # Main API
     "decode_module",
     "instantiate",
+    "execute_function",
     "Instance",
     # Decoder internals (for testing)
     "BinaryReader",

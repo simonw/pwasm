@@ -13,3 +13,5 @@ uv.lock
 
 # WebAssembly spec test suite
 spec/
+# MicroQuickJS WASM files (downloaded from simonw/research)
+tests/mquickjs*.wasm
