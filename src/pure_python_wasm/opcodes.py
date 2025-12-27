@@ -225,6 +225,18 @@ REF_NULL = 0xD0
 REF_IS_NULL = 0xD1
 REF_FUNC = 0xD2
 
+# Extended opcode prefix
+EXTENDED_PREFIX = 0xFC
+
+# Extended opcodes (after 0xFC prefix, encoded as LEB128)
+# These are virtual opcodes for internal use (add 0xFC00 to distinguish from regular opcodes)
+TABLE_INIT = 0xFC0C  # 0xFC 12
+ELEM_DROP = 0xFC0D  # 0xFC 13
+TABLE_COPY = 0xFC0E  # 0xFC 14
+TABLE_GROW = 0xFC0F  # 0xFC 15
+TABLE_SIZE = 0xFC10  # 0xFC 16
+TABLE_FILL = 0xFC11  # 0xFC 17
+
 # Opcode to name mapping
 OPCODE_NAMES = {
     UNREACHABLE: "unreachable",
@@ -410,6 +422,13 @@ OPCODE_NAMES = {
     REF_NULL: "ref.null",
     REF_IS_NULL: "ref.is_null",
     REF_FUNC: "ref.func",
+    # Extended opcodes
+    TABLE_INIT: "table.init",
+    ELEM_DROP: "elem.drop",
+    TABLE_COPY: "table.copy",
+    TABLE_GROW: "table.grow",
+    TABLE_SIZE: "table.size",
+    TABLE_FILL: "table.fill",
 }
 
 # Opcodes with no immediate

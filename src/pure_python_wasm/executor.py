@@ -94,10 +94,18 @@ class GlobalInstance:
 
 @dataclass
 class TableInstance:
-    """Runtime table instance."""
+    """Runtime table instance.
 
-    elements: list[int | None]  # Function indices or None
+    Elements can be:
+    - None: null reference
+    - int: function index (for funcref tables)
+    - ('func', idx): function reference
+    - ('extern', val): external reference
+    """
+
+    elements: list[Any]  # Reference values or None
     max: int | None = None
+    elem_type: str = "funcref"  # 'funcref' or 'externref'
 
 
 class ExportNamespace:
@@ -577,6 +585,77 @@ def execute_instruction(
         result = mem.grow(delta)
         stack.append(result)
 
+    # Table operations
+    elif op == "table.get":
+        table_idx = instr.operand
+        idx = stack.pop()
+        if table_idx >= len(instance.tables):
+            raise TrapError("undefined table")
+        table = instance.tables[table_idx]
+        if idx < 0 or idx >= len(table.elements):
+            raise TrapError("out of bounds table access")
+        stack.append(table.elements[idx])
+
+    elif op == "table.set":
+        table_idx = instr.operand
+        val = stack.pop()
+        idx = stack.pop()
+        if table_idx >= len(instance.tables):
+            raise TrapError("undefined table")
+        table = instance.tables[table_idx]
+        if idx < 0 or idx >= len(table.elements):
+            raise TrapError("out of bounds table access")
+        table.elements[idx] = val
+
+    elif op == "table.size":
+        table_idx = instr.operand
+        if table_idx >= len(instance.tables):
+            raise TrapError("undefined table")
+        table = instance.tables[table_idx]
+        stack.append(len(table.elements))
+
+    elif op == "table.grow":
+        table_idx = instr.operand
+        n = stack.pop()  # Number of elements to grow
+        init = stack.pop()  # Initial value for new elements
+        if table_idx >= len(instance.tables):
+            raise TrapError("undefined table")
+        table = instance.tables[table_idx]
+        old_size = len(table.elements)
+        # Check if growth would exceed maximum
+        if table.max is not None and old_size + n > table.max:
+            stack.append(-1)  # Return -1 on failure
+        else:
+            table.elements.extend([init] * n)
+            stack.append(old_size)  # Return old size on success
+
+    elif op == "table.fill":
+        table_idx = instr.operand
+        n = stack.pop()  # Number of elements
+        val = stack.pop()  # Value to fill
+        i = stack.pop()  # Start index
+        if table_idx >= len(instance.tables):
+            raise TrapError("undefined table")
+        table = instance.tables[table_idx]
+        if i < 0 or i + n > len(table.elements):
+            raise TrapError("out of bounds table access")
+        for j in range(n):
+            table.elements[i + j] = val
+
+    # Reference operations
+    elif op == "ref.null":
+        # Push null reference of specified type
+        stack.append(None)
+
+    elif op == "ref.is_null":
+        val = stack.pop()
+        stack.append(1 if val is None else 0)
+
+    elif op == "ref.func":
+        func_idx = instr.operand
+        # Push a function reference
+        stack.append(("func", func_idx))
+
     # Control flow
     elif op == "nop":
         pass
@@ -854,8 +933,11 @@ def instantiate(
     # Initialize tables
     tables: list[TableInstance] = []
     for table in module.tables:
-        elements: list[int | None] = [None] * table.limits.min
-        tables.append(TableInstance(elements, table.limits.max))
+        elements: list[Any] = [None] * table.limits.min
+        elem_type = (
+            table.element_type if isinstance(table.element_type, str) else "funcref"
+        )
+        tables.append(TableInstance(elements, table.limits.max, elem_type))
 
     # Initialize element segments
     for elem in module.elem:

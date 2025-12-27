@@ -159,9 +159,59 @@ def decode_blocktype(reader: BinaryReader) -> tuple | str | int:
     return decode_signed_leb128(reader)
 
 
+def decode_extended_instruction(sub_opcode: int, reader: BinaryReader) -> Instruction:
+    """Decode an extended instruction (0xFC prefix)."""
+    # Create virtual opcode for internal use
+    virtual_opcode = 0xFC00 | sub_opcode
+
+    if virtual_opcode not in opcodes.OPCODE_NAMES:
+        raise DecodeError(f"Unknown extended opcode: 0xFC 0x{sub_opcode:02x}")
+
+    name = opcodes.OPCODE_NAMES[virtual_opcode]
+
+    # table.size takes a table index
+    if sub_opcode == 0x10:  # table.size
+        table_idx = decode_unsigned_leb128(reader)
+        return Instruction(name, table_idx)
+
+    # table.grow takes table index
+    if sub_opcode == 0x0F:  # table.grow
+        table_idx = decode_unsigned_leb128(reader)
+        return Instruction(name, table_idx)
+
+    # table.fill takes table index
+    if sub_opcode == 0x11:  # table.fill
+        table_idx = decode_unsigned_leb128(reader)
+        return Instruction(name, table_idx)
+
+    # table.copy takes two table indices
+    if sub_opcode == 0x0E:  # table.copy
+        dst_table = decode_unsigned_leb128(reader)
+        src_table = decode_unsigned_leb128(reader)
+        return Instruction(name, (dst_table, src_table))
+
+    # table.init takes elem index and table index
+    if sub_opcode == 0x0C:  # table.init
+        elem_idx = decode_unsigned_leb128(reader)
+        table_idx = decode_unsigned_leb128(reader)
+        return Instruction(name, (elem_idx, table_idx))
+
+    # elem.drop takes elem index
+    if sub_opcode == 0x0D:  # elem.drop
+        elem_idx = decode_unsigned_leb128(reader)
+        return Instruction(name, elem_idx)
+
+    raise DecodeError(f"Unhandled extended opcode: 0xFC 0x{sub_opcode:02x}")
+
+
 def decode_instruction(reader: BinaryReader) -> Instruction:
     """Decode a single instruction."""
     opcode = reader.read_byte()
+
+    # Handle extended opcode prefix (0xFC)
+    if opcode == opcodes.EXTENDED_PREFIX:
+        sub_opcode = decode_unsigned_leb128(reader)
+        return decode_extended_instruction(sub_opcode, reader)
 
     # Get opcode name
     if opcode not in opcodes.OPCODE_NAMES:
@@ -357,20 +407,123 @@ def decode_start_section(reader: BinaryReader, module: Module) -> None:
 
 
 def decode_element_section(reader: BinaryReader, module: Module) -> None:
-    """Decode the element section."""
+    """Decode the element section.
+
+    Element segment flags:
+    - 0: Active, table 0, funcref, expr offset, vec(funcidx)
+    - 1: Passive, elemkind, vec(funcidx)
+    - 2: Active, tableidx, elemkind, expr offset, vec(funcidx)
+    - 3: Declarative, elemkind, vec(funcidx)
+    - 4: Active, table 0, expr offset, vec(expr)
+    - 5: Passive, reftype, vec(expr)
+    - 6: Active, tableidx, reftype, expr offset, vec(expr)
+    - 7: Declarative, reftype, vec(expr)
+    """
     count = decode_unsigned_leb128(reader)
     for _ in range(count):
-        # Simple active element segment (MVP)
         flags = decode_unsigned_leb128(reader)
 
         if flags == 0:
-            # Active segment for table 0
+            # Active segment for table 0, funcref, vec(funcidx)
             offset = decode_expr(reader)
             func_count = decode_unsigned_leb128(reader)
             func_indices = [decode_unsigned_leb128(reader) for _ in range(func_count)]
             module.elem.append(Element(0, offset, func_indices))
+
+        elif flags == 1:
+            # Passive segment, elemkind, vec(funcidx)
+            _elemkind = reader.read_byte()  # Must be 0x00 for funcref
+            func_count = decode_unsigned_leb128(reader)
+            func_indices = [decode_unsigned_leb128(reader) for _ in range(func_count)]
+            # Passive segments have table_idx = -1 (not active)
+            module.elem.append(Element(-1, [], func_indices))
+
+        elif flags == 2:
+            # Active segment with table index, elemkind, vec(funcidx)
+            table_idx = decode_unsigned_leb128(reader)
+            offset = decode_expr(reader)
+            _elemkind = reader.read_byte()  # Must be 0x00 for funcref
+            func_count = decode_unsigned_leb128(reader)
+            func_indices = [decode_unsigned_leb128(reader) for _ in range(func_count)]
+            module.elem.append(Element(table_idx, offset, func_indices))
+
+        elif flags == 3:
+            # Declarative segment, elemkind, vec(funcidx)
+            _elemkind = reader.read_byte()
+            func_count = decode_unsigned_leb128(reader)
+            func_indices = [decode_unsigned_leb128(reader) for _ in range(func_count)]
+            # Declarative segments declare functions for validation, not for tables
+            module.elem.append(Element(-2, [], func_indices))
+
+        elif flags == 4:
+            # Active segment for table 0, vec(expr)
+            offset = decode_expr(reader)
+            elem_count = decode_unsigned_leb128(reader)
+            # Each element is an expression (we only handle ref.func for now)
+            func_indices = []
+            for _ in range(elem_count):
+                expr = decode_expr(reader)
+                # Extract function index from ref.func instruction
+                for instr in expr:
+                    if instr.opcode == "ref.func":
+                        func_indices.append(instr.operand)
+                        break
+                    elif instr.opcode == "ref.null":
+                        func_indices.append(None)
+                        break
+            module.elem.append(Element(0, offset, func_indices))
+
+        elif flags == 5:
+            # Passive segment, reftype, vec(expr)
+            _reftype = decode_valtype(reader)
+            elem_count = decode_unsigned_leb128(reader)
+            func_indices = []
+            for _ in range(elem_count):
+                expr = decode_expr(reader)
+                for instr in expr:
+                    if instr.opcode == "ref.func":
+                        func_indices.append(instr.operand)
+                        break
+                    elif instr.opcode == "ref.null":
+                        func_indices.append(None)
+                        break
+            module.elem.append(Element(-1, [], func_indices))
+
+        elif flags == 6:
+            # Active segment with table index, reftype, vec(expr)
+            table_idx = decode_unsigned_leb128(reader)
+            offset = decode_expr(reader)
+            _reftype = decode_valtype(reader)
+            elem_count = decode_unsigned_leb128(reader)
+            func_indices = []
+            for _ in range(elem_count):
+                expr = decode_expr(reader)
+                for instr in expr:
+                    if instr.opcode == "ref.func":
+                        func_indices.append(instr.operand)
+                        break
+                    elif instr.opcode == "ref.null":
+                        func_indices.append(None)
+                        break
+            module.elem.append(Element(table_idx, offset, func_indices))
+
+        elif flags == 7:
+            # Declarative segment, reftype, vec(expr)
+            _reftype = decode_valtype(reader)
+            elem_count = decode_unsigned_leb128(reader)
+            func_indices = []
+            for _ in range(elem_count):
+                expr = decode_expr(reader)
+                for instr in expr:
+                    if instr.opcode == "ref.func":
+                        func_indices.append(instr.operand)
+                        break
+                    elif instr.opcode == "ref.null":
+                        func_indices.append(None)
+                        break
+            module.elem.append(Element(-2, [], func_indices))
+
         else:
-            # More complex element segment types (post-MVP)
             raise DecodeError(f"Unsupported element segment flags: {flags}")
 
 

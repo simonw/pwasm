@@ -296,7 +296,13 @@ def execute_action(
 
 
 def parse_value(val: dict):
-    """Parse a value from JSON format."""
+    """Parse a value from JSON format.
+
+    wast2json encodes float values as their integer bit representations.
+    For example, f32 value 0x1.18p-144 is encoded as "35" (the integer bit pattern).
+    """
+    import struct
+
     val_type = val.get("type")
     val_str = val.get("value")
 
@@ -313,11 +319,27 @@ def parse_value(val: dict):
     elif val_type == "f32":
         if val_str == "nan:canonical" or val_str == "nan:arithmetic":
             return float("nan")
-        return float.fromhex(val_str) if "0x" in val_str else float(val_str)
+        # wast2json encodes f32 as integer bit pattern
+        bits = int(val_str)
+        (f,) = struct.unpack("<f", struct.pack("<I", bits & 0xFFFFFFFF))
+        return f
     elif val_type == "f64":
         if val_str == "nan:canonical" or val_str == "nan:arithmetic":
             return float("nan")
-        return float.fromhex(val_str) if "0x" in val_str else float(val_str)
+        # wast2json encodes f64 as integer bit pattern
+        bits = int(val_str)
+        (f,) = struct.unpack("<d", struct.pack("<Q", bits & 0xFFFFFFFFFFFFFFFF))
+        return f
+    elif val_type == "externref":
+        if val_str == "null":
+            return None
+        # External references use ("extern", id)
+        return ("extern", int(val_str))
+    elif val_type == "funcref":
+        if val_str == "null":
+            return None
+        # Function references use ("func", idx)
+        return ("func", int(val_str))
 
     return val_str
 
