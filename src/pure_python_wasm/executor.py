@@ -465,6 +465,70 @@ def execute_instruction(
         b, a = stack.pop(), stack.pop()
         stack.append(1 if to_u64(a) >= to_u64(b) else 0)
 
+    # i64 bitwise operations
+    elif op == "i64.and":
+        b, a = stack.pop(), stack.pop()
+        stack.append(to_i64((a & MASK_64) & (b & MASK_64)))
+    elif op == "i64.or":
+        b, a = stack.pop(), stack.pop()
+        stack.append(to_i64((a & MASK_64) | (b & MASK_64)))
+    elif op == "i64.xor":
+        b, a = stack.pop(), stack.pop()
+        stack.append(to_i64((a & MASK_64) ^ (b & MASK_64)))
+    elif op == "i64.shl":
+        b, a = stack.pop(), stack.pop()
+        shift = b & 63  # Only use low 6 bits for shift amount
+        stack.append(to_i64((a & MASK_64) << shift))
+    elif op == "i64.shr_s":
+        b, a = stack.pop(), stack.pop()
+        shift = b & 63
+        signed_a = to_i64(a)
+        stack.append(signed_a >> shift)
+    elif op == "i64.shr_u":
+        b, a = stack.pop(), stack.pop()
+        shift = b & 63
+        stack.append((a & MASK_64) >> shift)
+    elif op == "i64.rotl":
+        b, a = stack.pop(), stack.pop()
+        shift = b & 63
+        ua = a & MASK_64
+        result = ((ua << shift) | (ua >> (64 - shift))) & MASK_64
+        stack.append(to_i64(result))
+    elif op == "i64.clz":
+        val = stack.pop() & MASK_64
+        if val == 0:
+            stack.append(64)
+        else:
+            count = 0
+            while (val & (1 << 63)) == 0:
+                count += 1
+                val <<= 1
+            stack.append(count)
+    elif op == "i64.div_u":
+        b, a = stack.pop(), stack.pop()
+        ua, ub = a & MASK_64, b & MASK_64
+        if ub == 0:
+            raise TrapError("integer divide by zero")
+        stack.append(ua // ub)
+    elif op == "i64.rem_u":
+        b, a = stack.pop(), stack.pop()
+        ua, ub = a & MASK_64, b & MASK_64
+        if ub == 0:
+            raise TrapError("integer divide by zero")
+        stack.append(ua % ub)
+
+    # i64 extend operations
+    elif op == "i64.extend_i32_s":
+        val = stack.pop()
+        # Sign extend 32-bit to 64-bit
+        if val >= 0x80000000:
+            val -= 0x100000000
+        stack.append(val)
+    elif op == "i64.extend_i32_u":
+        val = stack.pop()
+        # Zero extend 32-bit to 64-bit
+        stack.append(val & MASK_32)
+
     # Type conversions
     elif op == "i32.wrap_i64":
         val = stack.pop()
@@ -473,6 +537,139 @@ def execute_instruction(
         if result >= 0x80000000:
             result -= 0x100000000
         stack.append(result)
+
+    elif op == "i32.trunc_f64_s":
+        import math
+
+        val = stack.pop()
+        if math.isnan(val) or math.isinf(val):
+            raise TrapError("invalid conversion to integer")
+        if val >= 2147483648.0 or val < -2147483649.0:
+            raise TrapError("integer overflow")
+        stack.append(int(val))
+
+    elif op == "i32.trunc_f64_u":
+        import math
+
+        val = stack.pop()
+        if math.isnan(val) or math.isinf(val):
+            raise TrapError("invalid conversion to integer")
+        if val >= 4294967296.0 or val < -1.0:
+            raise TrapError("integer overflow")
+        stack.append(int(val) & MASK_32)
+
+    elif op == "i32.trunc_f32_s":
+        import math
+
+        val = stack.pop()
+        if math.isnan(val) or math.isinf(val):
+            raise TrapError("invalid conversion to integer")
+        if val >= 2147483648.0 or val < -2147483649.0:
+            raise TrapError("integer overflow")
+        stack.append(int(val))
+
+    elif op == "f64.convert_i32_s":
+        val = stack.pop()
+        stack.append(float(to_i32(val)))
+
+    elif op == "f64.convert_i32_u":
+        val = stack.pop()
+        stack.append(float(val & MASK_32))
+
+    elif op == "f64.promote_f32":
+        val = stack.pop()
+        stack.append(float(val))
+
+    elif op == "f32.demote_f64":
+        import struct
+
+        val = stack.pop()
+        # Convert to f32 and back to handle precision
+        (result,) = struct.unpack("<f", struct.pack("<f", val))
+        stack.append(result)
+
+    elif op == "i64.reinterpret_f64":
+        import struct
+
+        val = stack.pop()
+        (result,) = struct.unpack("<q", struct.pack("<d", val))
+        stack.append(result)
+
+    elif op == "f64.reinterpret_i64":
+        import struct
+
+        val = stack.pop()
+        (result,) = struct.unpack("<d", struct.pack("<q", val & MASK_64))
+        stack.append(result)
+
+    # f64 arithmetic
+    elif op == "f64.add":
+        b, a = stack.pop(), stack.pop()
+        stack.append(a + b)
+
+    elif op == "f64.sub":
+        b, a = stack.pop(), stack.pop()
+        stack.append(a - b)
+
+    elif op == "f64.mul":
+        b, a = stack.pop(), stack.pop()
+        stack.append(a * b)
+
+    elif op == "f64.div":
+        b, a = stack.pop(), stack.pop()
+        stack.append(a / b)
+
+    elif op == "f64.abs":
+        val = stack.pop()
+        stack.append(abs(val))
+
+    elif op == "f64.neg":
+        val = stack.pop()
+        stack.append(-val)
+
+    elif op == "f64.copysign":
+        import math
+
+        b, a = stack.pop(), stack.pop()
+        stack.append(math.copysign(a, b))
+
+    # f64 comparison
+    elif op == "f64.eq":
+        b, a = stack.pop(), stack.pop()
+        stack.append(1 if a == b else 0)
+
+    elif op == "f64.ne":
+        b, a = stack.pop(), stack.pop()
+        stack.append(1 if a != b else 0)
+
+    elif op == "f64.lt":
+        b, a = stack.pop(), stack.pop()
+        stack.append(1 if a < b else 0)
+
+    elif op == "f64.gt":
+        b, a = stack.pop(), stack.pop()
+        stack.append(1 if a > b else 0)
+
+    elif op == "f64.le":
+        b, a = stack.pop(), stack.pop()
+        stack.append(1 if a <= b else 0)
+
+    elif op == "f64.ge":
+        b, a = stack.pop(), stack.pop()
+        stack.append(1 if a >= b else 0)
+
+    # f32 operations
+    elif op == "f32.abs":
+        val = stack.pop()
+        stack.append(abs(val))
+
+    elif op == "f32.lt":
+        b, a = stack.pop(), stack.pop()
+        stack.append(1 if a < b else 0)
+
+    elif op == "f32.ge":
+        b, a = stack.pop(), stack.pop()
+        stack.append(1 if a >= b else 0)
 
     # Memory load operations
     elif op == "i32.load":
@@ -504,6 +701,27 @@ def execute_instruction(
             val -= 256
         stack.append(val)
 
+    elif op == "i32.load16_u":
+        align, offset = instr.operand
+        addr = stack.pop()
+        ea = addr + offset
+        mem = instance.memories[0].data
+        if ea < 0 or ea + 2 > len(mem):
+            raise TrapError("out of bounds memory access")
+        stack.append(int.from_bytes(mem[ea : ea + 2], "little"))
+
+    elif op == "i32.load16_s":
+        align, offset = instr.operand
+        addr = stack.pop()
+        ea = addr + offset
+        mem = instance.memories[0].data
+        if ea < 0 or ea + 2 > len(mem):
+            raise TrapError("out of bounds memory access")
+        val = int.from_bytes(mem[ea : ea + 2], "little")
+        if val >= 0x8000:
+            val -= 0x10000
+        stack.append(val)
+
     # Memory store operations
     elif op == "i32.store":
         align, offset = instr.operand
@@ -523,6 +741,129 @@ def execute_instruction(
         if ea < 0 or ea >= len(instance.memories[0].data):
             raise TrapError("out of bounds memory access")
         instance.memories[0].data[ea] = val & 0xFF
+
+    elif op == "i64.load":
+        align, offset = instr.operand
+        addr = stack.pop()
+        ea = addr + offset
+        mem = instance.memories[0].data
+        if ea < 0 or ea + 8 > len(mem):
+            raise TrapError("out of bounds memory access")
+        val = int.from_bytes(mem[ea : ea + 8], "little")
+        # Convert to signed 64-bit
+        if val >= 0x8000000000000000:
+            val -= 0x10000000000000000
+        stack.append(val)
+
+    elif op == "i64.store":
+        align, offset = instr.operand
+        val = stack.pop()
+        addr = stack.pop()
+        ea = addr + offset
+        mem = instance.memories[0].data
+        if ea < 0 or ea + 8 > len(mem):
+            raise TrapError("out of bounds memory access")
+        mem[ea : ea + 8] = (val & MASK_64).to_bytes(8, "little")
+
+    elif op == "i64.load8_s":
+        align, offset = instr.operand
+        addr = stack.pop()
+        ea = addr + offset
+        if ea < 0 or ea >= len(instance.memories[0].data):
+            raise TrapError("out of bounds memory access")
+        val = instance.memories[0].data[ea]
+        if val >= 128:
+            val -= 256
+        stack.append(val)
+
+    elif op == "i64.load8_u":
+        align, offset = instr.operand
+        addr = stack.pop()
+        ea = addr + offset
+        if ea < 0 or ea >= len(instance.memories[0].data):
+            raise TrapError("out of bounds memory access")
+        stack.append(instance.memories[0].data[ea])
+
+    elif op == "i64.load16_s":
+        align, offset = instr.operand
+        addr = stack.pop()
+        ea = addr + offset
+        mem = instance.memories[0].data
+        if ea < 0 or ea + 2 > len(mem):
+            raise TrapError("out of bounds memory access")
+        val = int.from_bytes(mem[ea : ea + 2], "little")
+        if val >= 0x8000:
+            val -= 0x10000
+        stack.append(val)
+
+    elif op == "i64.load16_u":
+        align, offset = instr.operand
+        addr = stack.pop()
+        ea = addr + offset
+        mem = instance.memories[0].data
+        if ea < 0 or ea + 2 > len(mem):
+            raise TrapError("out of bounds memory access")
+        stack.append(int.from_bytes(mem[ea : ea + 2], "little"))
+
+    elif op == "i64.load32_s":
+        align, offset = instr.operand
+        addr = stack.pop()
+        ea = addr + offset
+        mem = instance.memories[0].data
+        if ea < 0 or ea + 4 > len(mem):
+            raise TrapError("out of bounds memory access")
+        val = int.from_bytes(mem[ea : ea + 4], "little")
+        if val >= 0x80000000:
+            val -= 0x100000000
+        stack.append(val)
+
+    elif op == "i64.load32_u":
+        align, offset = instr.operand
+        addr = stack.pop()
+        ea = addr + offset
+        mem = instance.memories[0].data
+        if ea < 0 or ea + 4 > len(mem):
+            raise TrapError("out of bounds memory access")
+        stack.append(int.from_bytes(mem[ea : ea + 4], "little"))
+
+    elif op == "i64.store8":
+        align, offset = instr.operand
+        val = stack.pop()
+        addr = stack.pop()
+        ea = addr + offset
+        if ea < 0 or ea >= len(instance.memories[0].data):
+            raise TrapError("out of bounds memory access")
+        instance.memories[0].data[ea] = val & 0xFF
+
+    elif op == "i64.store16":
+        align, offset = instr.operand
+        val = stack.pop()
+        addr = stack.pop()
+        ea = addr + offset
+        mem = instance.memories[0].data
+        if ea < 0 or ea + 2 > len(mem):
+            raise TrapError("out of bounds memory access")
+        mem[ea : ea + 2] = (val & 0xFFFF).to_bytes(2, "little")
+
+    elif op == "i64.store32":
+        align, offset = instr.operand
+        val = stack.pop()
+        addr = stack.pop()
+        ea = addr + offset
+        mem = instance.memories[0].data
+        if ea < 0 or ea + 4 > len(mem):
+            raise TrapError("out of bounds memory access")
+        mem[ea : ea + 4] = (val & 0xFFFFFFFF).to_bytes(4, "little")
+
+    elif op == "i32.store16":
+        align, offset = instr.operand
+        val = stack.pop()
+        addr = stack.pop()
+        ea = addr + offset
+        mem = instance.memories[0].data
+        if ea < 0 or ea + 2 > len(mem):
+            raise TrapError("out of bounds memory access")
+        mem[ea : ea + 2] = (val & 0xFFFF).to_bytes(2, "little")
 
     # Float load operations
     elif op == "f32.load":
