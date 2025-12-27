@@ -123,10 +123,11 @@ class Instance:
     """A WebAssembly module instance with runtime state."""
 
     module: Module
-    funcs: list[Function]  # All functions (imports + module-defined)
+    funcs: list[Function | None]  # All functions (imports + module-defined)
     func_types: list[FuncType]
     memories: list[MemoryInstance]
     globals: list[GlobalInstance]
+    imported_funcs: dict[int, Callable] = field(default_factory=dict)  # idx -> callable
     exports: ExportNamespace = field(init=False)
 
     def __post_init__(self) -> None:
@@ -157,7 +158,14 @@ class Instance:
 
 def execute_function(instance: Instance, func_idx: int, args: list[Any]) -> Any:
     """Execute a function and return its result(s)."""
+    # Check if this is an imported function
+    if func_idx in instance.imported_funcs:
+        imported_fn = instance.imported_funcs[func_idx]
+        return imported_fn(*args)
+
     func = instance.funcs[func_idx]
+    if func is None:
+        raise TrapError(f"Function {func_idx} is not available (missing import?)")
     func_type = instance.func_types[func.type_idx]
 
     # Set up locals: params + declared locals
@@ -437,6 +445,15 @@ def execute_instruction(
         b, a = stack.pop(), stack.pop()
         stack.append(1 if to_u64(a) >= to_u64(b) else 0)
 
+    # Type conversions
+    elif op == "i32.wrap_i64":
+        val = stack.pop()
+        # Truncate to low 32 bits and interpret as signed i32
+        result = val & MASK_32
+        if result >= 0x80000000:
+            result -= 0x100000000
+        stack.append(result)
+
     # Memory load operations
     elif op == "i32.load":
         align, offset = instr.operand
@@ -486,6 +503,56 @@ def execute_instruction(
         if ea < 0 or ea >= len(instance.memories[0].data):
             raise TrapError("out of bounds memory access")
         instance.memories[0].data[ea] = val & 0xFF
+
+    # Float load operations
+    elif op == "f32.load":
+        import struct
+
+        align, offset = instr.operand
+        addr = stack.pop()
+        ea = addr + offset
+        mem = instance.memories[0].data
+        if ea < 0 or ea + 4 > len(mem):
+            raise TrapError("out of bounds memory access")
+        (val,) = struct.unpack("<f", bytes(mem[ea : ea + 4]))
+        stack.append(val)
+
+    elif op == "f64.load":
+        import struct
+
+        align, offset = instr.operand
+        addr = stack.pop()
+        ea = addr + offset
+        mem = instance.memories[0].data
+        if ea < 0 or ea + 8 > len(mem):
+            raise TrapError("out of bounds memory access")
+        (val,) = struct.unpack("<d", bytes(mem[ea : ea + 8]))
+        stack.append(val)
+
+    # Float store operations
+    elif op == "f32.store":
+        import struct
+
+        align, offset = instr.operand
+        val = stack.pop()
+        addr = stack.pop()
+        ea = addr + offset
+        mem = instance.memories[0].data
+        if ea < 0 or ea + 4 > len(mem):
+            raise TrapError("out of bounds memory access")
+        mem[ea : ea + 4] = struct.pack("<f", val)
+
+    elif op == "f64.store":
+        import struct
+
+        align, offset = instr.operand
+        val = stack.pop()
+        addr = stack.pop()
+        ea = addr + offset
+        mem = instance.memories[0].data
+        if ea < 0 or ea + 8 > len(mem):
+            raise TrapError("out of bounds memory access")
+        mem[ea : ea + 8] = struct.pack("<d", val)
 
     # Memory size/grow
     elif op == "memory.size":
@@ -572,7 +639,13 @@ def execute_instruction(
     elif op == "call":
         func_idx = instr.operand
         func = instance.funcs[func_idx]
-        func_type = instance.func_types[func.type_idx]
+        if func is None:
+            # Imported function - get type from import descriptor
+            import_idx = func_idx  # imports come first
+            imp = instance.module.imports[import_idx]
+            func_type = instance.func_types[imp.desc]
+        else:
+            func_type = instance.func_types[func.type_idx]
         n_params = len(func_type.params)
         args = [stack.pop() for _ in range(n_params)][::-1]
         return ("call", func_idx, args)
@@ -658,14 +731,21 @@ def instantiate(
     func_types = list(module.types)
 
     # Collect all functions (imports first, then module-defined)
-    funcs: list[Function] = []
+    funcs: list[Function | None] = []
+    imported_funcs: dict[int, Callable] = {}
 
     # Handle imported functions
+    func_idx = 0
     for imp in module.imports:
         if imp.kind == "func":
-            # For now, we don't support imported functions in execution
-            # We'd need to wrap Python callables
-            pass
+            # Look up the imported function
+            mod_imports = imports.get(imp.module, {})
+            func_callable = mod_imports.get(imp.name)
+            if func_callable is not None:
+                imported_funcs[func_idx] = func_callable
+            # Add placeholder to maintain correct indices
+            funcs.append(None)
+            func_idx += 1
 
     # Add module-defined functions
     funcs.extend(module.funcs)
@@ -707,6 +787,7 @@ def instantiate(
         func_types=func_types,
         memories=memories,
         globals=globals_list,
+        imported_funcs=imported_funcs,
     )
 
     # Run start function if present

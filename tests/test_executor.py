@@ -608,3 +608,194 @@ class TestMemoryOps:
         # Try to grow beyond max (4), should return -1
         assert instance.exports.grow(2) == -1
         assert instance.exports.size() == 3  # unchanged
+
+
+class TestFloatMemory:
+    """Test f32/f64 load and store operations."""
+
+    def test_f32_load_and_store(self):
+        """Test f32.load and f32.store instructions."""
+        import subprocess
+        import struct
+        import tempfile
+        from pathlib import Path
+
+        wat = """
+        (module
+          (memory 1)
+          (func (export "store") (param f32)
+            (f32.store (i32.const 0) (local.get 0)))
+          (func (export "load") (result f32)
+            (f32.load (i32.const 0)))
+        )
+        """
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            wat_path = Path(tmpdir) / "test.wat"
+            wasm_path = Path(tmpdir) / "test.wasm"
+            wat_path.write_text(wat)
+
+            result = subprocess.run(
+                ["wat2wasm", str(wat_path), "-o", str(wasm_path)],
+                capture_output=True,
+            )
+            if result.returncode != 0:
+                pytest.skip("wat2wasm not available")
+
+            wasm = wasm_path.read_bytes()
+
+        module = decode_module(wasm)
+        instance = instantiate(module)
+
+        # Store and load 3.14
+        instance.exports.store(3.14)
+        result = instance.exports.load()
+        assert abs(result - 3.14) < 0.001
+
+        # Store and load negative
+        instance.exports.store(-42.5)
+        result = instance.exports.load()
+        assert result == -42.5
+
+    def test_f64_load_and_store(self):
+        """Test f64.load and f64.store instructions."""
+        import subprocess
+        import tempfile
+        from pathlib import Path
+
+        wat = """
+        (module
+          (memory 1)
+          (func (export "store") (param f64)
+            (f64.store (i32.const 0) (local.get 0)))
+          (func (export "load") (result f64)
+            (f64.load (i32.const 0)))
+        )
+        """
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            wat_path = Path(tmpdir) / "test.wat"
+            wasm_path = Path(tmpdir) / "test.wasm"
+            wat_path.write_text(wat)
+
+            result = subprocess.run(
+                ["wat2wasm", str(wat_path), "-o", str(wasm_path)],
+                capture_output=True,
+            )
+            if result.returncode != 0:
+                pytest.skip("wat2wasm not available")
+
+            wasm = wasm_path.read_bytes()
+
+        module = decode_module(wasm)
+        instance = instantiate(module)
+
+        # Store and load pi with high precision
+        import math
+
+        instance.exports.store(math.pi)
+        result = instance.exports.load()
+        assert abs(result - math.pi) < 1e-15
+
+        # Store and load large number
+        instance.exports.store(1e100)
+        result = instance.exports.load()
+        assert result == 1e100
+
+
+class TestConversions:
+    """Test type conversion instructions."""
+
+    def test_i32_wrap_i64(self):
+        """Test i32.wrap_i64 instruction - truncates i64 to i32."""
+        import subprocess
+        import tempfile
+        from pathlib import Path
+
+        wat = """
+        (module
+          (func (export "wrap") (param i64) (result i32)
+            (i32.wrap_i64 (local.get 0)))
+        )
+        """
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            wat_path = Path(tmpdir) / "test.wat"
+            wasm_path = Path(tmpdir) / "test.wasm"
+            wat_path.write_text(wat)
+
+            result = subprocess.run(
+                ["wat2wasm", str(wat_path), "-o", str(wasm_path)],
+                capture_output=True,
+            )
+            if result.returncode != 0:
+                pytest.skip("wat2wasm not available")
+
+            wasm = wasm_path.read_bytes()
+
+        module = decode_module(wasm)
+        instance = instantiate(module)
+
+        # Simple case: small positive
+        assert instance.exports.wrap(42) == 42
+
+        # Truncation: only low 32 bits
+        assert instance.exports.wrap(0x1_0000_0001) == 1
+        assert instance.exports.wrap(0xFFFF_FFFF) == -1  # signed i32
+
+        # Large i64, should wrap to low bits
+        assert (
+            instance.exports.wrap(0x1234_5678_9ABC_DEF0) == 0x9ABC_DEF0 - 0x1_0000_0000
+        )
+
+
+class TestImports:
+    """Test function imports."""
+
+    def test_spectest_print_i32(self):
+        """Test calling an imported print_i32 function."""
+        import subprocess
+        import tempfile
+        from pathlib import Path
+
+        wat = """
+        (module
+          (func $print_i32 (import "spectest" "print_i32") (param i32))
+          (func (export "test") (param i32)
+            (call $print_i32 (local.get 0)))
+        )
+        """
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            wat_path = Path(tmpdir) / "test.wat"
+            wasm_path = Path(tmpdir) / "test.wasm"
+            wat_path.write_text(wat)
+
+            result = subprocess.run(
+                ["wat2wasm", str(wat_path), "-o", str(wasm_path)],
+                capture_output=True,
+            )
+            if result.returncode != 0:
+                pytest.skip("wat2wasm not available")
+
+            wasm = wasm_path.read_bytes()
+
+        module = decode_module(wasm)
+
+        # Track what values were printed
+        printed_values = []
+
+        def mock_print_i32(val):
+            printed_values.append(val)
+
+        # Create imports dictionary
+        imports = {"spectest": {"print_i32": mock_print_i32}}
+
+        instance = instantiate(module, imports)
+
+        # Call the test function
+        instance.exports.test(42)
+        assert printed_values == [42]
+
+        instance.exports.test(123)
+        assert printed_values == [42, 123]

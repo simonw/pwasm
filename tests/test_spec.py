@@ -72,6 +72,25 @@ def convert_wast_to_json(wast_path: Path, output_dir: Path) -> dict | None:
         return None
 
 
+def create_spectest_imports() -> dict:
+    """Create the spectest module imports used by spec tests."""
+
+    def noop(*args):
+        pass
+
+    return {
+        "spectest": {
+            "print": noop,
+            "print_i32": noop,
+            "print_i64": noop,
+            "print_f32": noop,
+            "print_f64": noop,
+            "print_i32_f32": noop,
+            "print_f64_f64": noop,
+        }
+    }
+
+
 def run_spec_test(json_data: dict, output_dir: Path) -> tuple[int, int, list[str]]:
     """Run spec test commands from JSON data.
 
@@ -82,6 +101,7 @@ def run_spec_test(json_data: dict, output_dir: Path) -> tuple[int, int, list[str
     errors: list[str] = []
     instances: dict[str, pure_python_wasm.Instance] = {}
     current_module: pure_python_wasm.Instance | None = None
+    spectest_imports = create_spectest_imports()
 
     for command in json_data.get("commands", []):
         cmd_type = command.get("type")
@@ -96,7 +116,9 @@ def run_spec_test(json_data: dict, output_dir: Path) -> tuple[int, int, list[str
                         with open(wasm_path, "rb") as f:
                             wasm_bytes = f.read()
                         module = pure_python_wasm.decode_module(wasm_bytes)
-                        current_module = pure_python_wasm.instantiate(module)
+                        current_module = pure_python_wasm.instantiate(
+                            module, spectest_imports
+                        )
                         name = command.get("name")
                         if name:
                             instances[name] = current_module
