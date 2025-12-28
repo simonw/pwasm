@@ -626,17 +626,17 @@ def execute_function_fast(instance: Instance, func_idx: int, args: list[Any]) ->
             continue
 
         if op == "call":
-            func_idx = operand
-            func = instance.funcs[func_idx]
-            if func is None:
-                import_idx = func_idx
+            call_func_idx = operand
+            called_func = instance.funcs[call_func_idx]
+            if called_func is None:
+                import_idx = call_func_idx
                 imp = instance.module.imports[import_idx]
-                func_type = instance.func_types[imp.desc]
+                call_func_type = instance.func_types[imp.desc]
             else:
-                func_type = instance.func_types[func.type_idx]
-            n_params = len(func_type.params)
+                call_func_type = instance.func_types[called_func.type_idx]
+            n_params = len(call_func_type.params)
             call_args = [stack_pop() for _ in range(n_params)][::-1]
-            call_result = execute_function_fast(instance, func_idx, call_args)
+            call_result = execute_function_fast(instance, call_func_idx, call_args)
             if call_result is not None:
                 if isinstance(call_result, tuple):
                     stack.extend(call_result)

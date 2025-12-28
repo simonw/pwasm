@@ -144,6 +144,16 @@ def main():
     # Get exports
     exports = {exp.name: exp.index for exp in instance.module.exports}
 
+    # Try running _start if not run yet (WASI initialization)
+    if "_start" in exports:
+        print("\nRunning WASI _start initialization...")
+        start = time.time()
+        try:
+            pure_python_wasm.execute_function(instance, exports["_start"], [])
+            print(f"  _start completed in {time.time() - start:.2f}s")
+        except Exception as e:
+            print(f"  _start failed after {time.time() - start:.2f}s: {e}")
+
     # Initialize sandbox
     print("\nInitializing QuickJS sandbox...")
     start = time.time()

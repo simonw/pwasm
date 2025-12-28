@@ -17,11 +17,12 @@ _max_time = 5.0
 _check_interval = 50000
 _last_report = 0
 _should_stop = False
+op_counts = {}
 
 
 def execute_function_instrumented(instance, func_idx, args):
     """Instrumented function execution that counts all instructions globally."""
-    global _instruction_count, _start_time, _last_report, _should_stop, _max_time, _check_interval
+    global _instruction_count, _start_time, _last_report, _should_stop, _max_time, _check_interval, op_counts
 
     # Check if this is an imported function
     if func_idx in instance.imported_funcs:
@@ -192,6 +193,9 @@ def execute_function_instrumented(instance, func_idx, args):
         if op == "return":
             break
 
+        # Track slow path ops
+        op_counts[op] = op_counts.get(op, 0) + 1
+
         # Fall back for other ops
         result = execute_instruction(
             instr, stack, labels, locals_list, instance, body, ip, jump_targets
@@ -277,6 +281,10 @@ def main():
         print(f"  Rate: {rate:,.0f} instructions/second")
     except TimeoutError as e:
         print(f"\n  {e}")
+        if op_counts:
+            print(f"\n  Slow path opcodes:")
+            for op, cnt in sorted(op_counts.items(), key=lambda x: -x[1])[:15]:
+                print(f"    {op}: {cnt:,}")
     except Exception as e:
         elapsed = time.monotonic() - _start_time
         rate = _instruction_count / elapsed if elapsed > 0 else 0
