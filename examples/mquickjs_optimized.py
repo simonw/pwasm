@@ -123,23 +123,39 @@ def main():
 
     # Create imports for the optimized build
     # The "a" module contains env-like functions (minified names)
+    # Import signatures based on WASM analysis:
+    # a.a: (i32,i32,i32,i32)->()  - fd_write or similar
+    # a.b: (i32,i32,i32,i32)->()  - another fd function
+    # a.c: (i32,i32)->()          - _emscripten_throw_longjmp or setTempRet0
+    # a.d: (i32,i32,i32)->i32     - invoke_iii
+    # a.e: (i32,i32,i32,i32,i32,i32)->() - invoke_viiiiii
+    # a.f: (i32,i32,i32)->()      - invoke_viii
+    # a.g: (i32,i32,i32,i32,i32)->() - invoke_viiiii
+    # a.h: (i32,i32,i32,i32)->i32 - invoke_iiii
+    # a.i: (i32,i32,i32,i32,i32)->i32 - invoke_iiiii
+    # a.j: (i32,i32)->i32         - invoke_iii variant
+    # a.k: (i32,i32,i32,i32,i32,i32,i32)->() - invoke_viiiiii
+    # a.l: (i32)->i32             - sbrk or memory
+    # a.m: ()->()                 - proc_exit
+    # a.n: ()->()                 - another exit
+    # a.o: ()->f64                - Date.now
     imports = {
         "a": {
-            "a": runtime.setTempRet0,  # setTempRet0
-            "b": runtime.getTempRet0,  # getTempRet0
-            "c": runtime._emscripten_throw_longjmp,  # _emscripten_throw_longjmp
+            "a": lambda a, b, c, d: None,  # fd_write
+            "b": lambda a, b, c, d: None,  # fd function
+            "c": runtime._emscripten_throw_longjmp,  # _emscripten_throw_longjmp (i32,i32)->()
             "d": runtime._make_invoke("iii"),  # invoke_iii
-            "e": runtime._make_invoke("iiii"),  # invoke_iiii
-            "f": runtime._make_invoke("iiiii"),  # invoke_iiiii
-            "g": runtime._make_invoke("vi"),  # invoke_vi
-            "h": runtime._make_invoke("vii"),  # invoke_vii
-            "i": runtime._make_invoke("viii"),  # invoke_viii
-            "j": runtime._make_invoke("viiiii"),  # invoke_viiiii
-            "k": runtime._make_invoke("viiiiii"),  # invoke_viiiiii
-            "l": lambda *a: 0,  # wasi: args_sizes_get
-            "m": lambda *a: 0,  # wasi: args_get
-            "n": lambda *a: None,  # wasi: proc_exit
-            "o": lambda *a: 0,  # wasi: fd_close / fd_write / fd_seek
+            "e": lambda *args: None,  # invoke_viiiiii
+            "f": lambda *args: None,  # invoke_viii
+            "g": lambda *args: None,  # invoke_viiiii
+            "h": runtime._make_invoke("iiii"),  # invoke_iiii
+            "i": runtime._make_invoke("iiiii"),  # invoke_iiiii
+            "j": lambda a, b: 0,  # invoke_ii or similar
+            "k": lambda *args: None,  # invoke_viiiiii
+            "l": lambda a: 0,  # sbrk - return 0 (failure)
+            "m": lambda: None,  # proc_exit
+            "n": lambda: None,  # exit
+            "o": lambda: 0.0,  # Date.now - return 0
         }
     }
 
@@ -153,6 +169,19 @@ def main():
     # Get export indices by minified name
     exports = {exp.name: exp.index for exp in instance.module.exports}
     print(f"\nExports: {list(exports.keys())}")
+
+    # Call __wasm_call_ctors first (export 'q')
+    if "q" in exports:
+        print("\nCalling __wasm_call_ctors (export 'q')...")
+        start = time.monotonic()
+        try:
+            pure_python_wasm.execute_function(instance, exports["q"], [])
+            elapsed = time.monotonic() - start
+            print(f"  __wasm_call_ctors completed in {elapsed:.2f}s")
+        except LongjmpException:
+            print(f"  __wasm_call_ctors: caught longjmp (continuing...)")
+        except Exception as e:
+            print(f"  __wasm_call_ctors error: {e}")
 
     # Try to initialize MicroQuickJS
     print("\nCalling _mquickjs_init (export 'r')...")
@@ -189,8 +218,8 @@ def main():
         print(f"  Error after {elapsed:.2f}s: {e}")
 
     # Try running simple JavaScript
-    print("\nRunning JavaScript: 1 + 2")
-    js_code = b"1 + 2\x00"
+    print("\nRunning JavaScript: 42")
+    js_code = b"42\x00"
 
     # Allocate memory for the code
     malloc_idx = exports.get("A")
@@ -205,26 +234,56 @@ def main():
                 memory = instance.memories[0].data
                 memory[code_ptr : code_ptr + len(js_code)] = js_code
                 print(f"  Wrote code to memory at {code_ptr}")
+                # Verify what's in memory
+                readback = bytes(memory[code_ptr : code_ptr + len(js_code)])
+                print(f"  Memory contents: {readback!r}")
 
-                # Call _mquickjs_run
+                # Call _mquickjs_run - takes just ONE param (pointer to null-terminated string)
                 run_idx = exports.get("v")
                 if run_idx:
-                    print(f"  Calling _mquickjs_run({code_ptr}, {len(js_code) - 1})...")
+                    print(f"  Calling _mquickjs_run({code_ptr})...")
                     start = time.monotonic()
                     try:
                         result = pure_python_wasm.execute_function(
-                            instance, run_idx, [code_ptr, len(js_code) - 1]
+                            instance, run_idx, [code_ptr]
                         )
                         elapsed = time.monotonic() - start
                         print(f"  _mquickjs_run returned {result} in {elapsed:.2f}s")
+
+                        # Result is a pointer to the result string
+                        if result and result > 0:
+                            output = []
+                            i = result
+                            while i < len(memory) and memory[i] != 0:
+                                output.append(chr(memory[i]))
+                                i += 1
+                            if output:
+                                print(f"  Result: {''.join(output)}")
+                            else:
+                                print("  Result: (empty string)")
+                        else:
+                            print("  Result: (null pointer)")
+
                     except LongjmpException:
                         elapsed = time.monotonic() - start
-                        print(
-                            f"  _mquickjs_run: caught longjmp after {elapsed:.2f}s (this is expected)"
-                        )
-                        # After longjmp, we need to handle the setjmp return
-                        # For now, just continue and get output
-                        result = None
+                        print(f"  _mquickjs_run: caught longjmp after {elapsed:.2f}s")
+                        # longjmp means an error occurred - check get_output for error message
+                        get_output_idx = exports.get("u")
+                        if get_output_idx:
+                            try:
+                                output_ptr = pure_python_wasm.execute_function(
+                                    instance, get_output_idx, []
+                                )
+                                if output_ptr and output_ptr > 0:
+                                    output = []
+                                    i = output_ptr
+                                    while i < len(memory) and memory[i] != 0:
+                                        output.append(chr(memory[i]))
+                                        i += 1
+                                    if output:
+                                        print(f"  Error output: {''.join(output)}")
+                            except Exception:
+                                pass
                     except Exception as e:
                         elapsed = time.monotonic() - start
                         print(f"  _mquickjs_run error after {elapsed:.2f}s: {e}")
@@ -232,32 +291,6 @@ def main():
 
                         traceback.print_exc()
                         return 1
-
-                    # Get output
-                    get_output_idx = exports.get("u")
-                    if get_output_idx:
-                        print("  Getting output...")
-                        try:
-                            output_ptr = pure_python_wasm.execute_function(
-                                instance, get_output_idx, []
-                            )
-                            print(f"  _mquickjs_get_output returned {output_ptr}")
-                            if output_ptr and output_ptr > 0:
-                                output = []
-                                i = output_ptr
-                                while i < len(memory) and memory[i] != 0:
-                                    output.append(chr(memory[i]))
-                                    i += 1
-                                if output:
-                                    print(f"  Output: {''.join(output)}")
-                                else:
-                                    print("  Output: (empty string)")
-                            else:
-                                print("  Output: (null pointer)")
-                        except LongjmpException:
-                            print("  _mquickjs_get_output: caught longjmp")
-                        except Exception as e:
-                            print(f"  _mquickjs_get_output error: {e}")
         except Exception as e:
             print(f"  Error: {e}")
             import traceback
