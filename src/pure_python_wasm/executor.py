@@ -1016,7 +1016,8 @@ def execute_instruction(
         # Find matching end
         blocktype = instr.operand
         arity = 0 if blocktype == () else 1 if isinstance(blocktype, tuple) else 0
-        end_ip = find_end(body, ip, jump_targets)
+        # ip is already incremented, so use ip-1 for cache lookup (the actual block position)
+        end_ip = find_end(body, ip - 1, jump_targets)
         labels.append(Label(arity=arity, target=end_ip, stack_height=len(stack)))
 
     elif op == "loop":
@@ -1033,7 +1034,8 @@ def execute_instruction(
             arity = len(func_type.params)
         else:
             arity = 0
-        end_ip = find_end(body, ip, jump_targets)
+        # ip is already incremented, so use ip-1 for cache lookup (the actual loop position)
+        end_ip = find_end(body, ip - 1, jump_targets)
         # For loops, stack_height is BEFORE the parameters (they're consumed on entry)
         labels.append(
             Label(
@@ -1050,7 +1052,8 @@ def execute_instruction(
         arity = 0 if blocktype == () else 1 if isinstance(blocktype, tuple) else 0
 
         # Find else and end
-        else_ip, end_ip = find_else_end(body, ip, jump_targets)
+        # ip is already incremented, so use ip-1 for cache lookup (the actual if position)
+        else_ip, end_ip = find_else_end(body, ip - 1, jump_targets)
 
         if condition:
             # Execute then branch
