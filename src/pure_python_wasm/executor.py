@@ -38,14 +38,18 @@ def to_u64(value: int) -> int:
     return value & MASK_64
 
 
-@dataclass
 class Label:
     """A control flow label for block/loop/if."""
 
-    arity: int  # Number of values on stack when branching
-    target: int  # Instruction index to jump to
-    is_loop: bool = False  # True if this is a loop label
-    stack_height: int = 0  # Stack height when block was entered
+    __slots__ = ("arity", "target", "is_loop", "stack_height")
+
+    def __init__(
+        self, arity: int, target: int, is_loop: bool = False, stack_height: int = 0
+    ):
+        self.arity = arity
+        self.target = target
+        self.is_loop = is_loop
+        self.stack_height = stack_height
 
 
 @dataclass
@@ -175,7 +179,18 @@ class Instance:
 
 
 def execute_function(instance: Instance, func_idx: int, args: list[Any]) -> Any:
-    """Execute a function and return its result(s)."""
+    """Execute a function and return its result(s).
+
+    This uses the optimized fast executor by default.
+    """
+    # Use the optimized version
+    return execute_function_fast(instance, func_idx, args)
+
+
+def execute_function_original(
+    instance: Instance, func_idx: int, args: list[Any]
+) -> Any:
+    """Execute a function using the original interpreter (for reference/debugging)."""
     # Check if this is an imported function
     if func_idx in instance.imported_funcs:
         imported_fn = instance.imported_funcs[func_idx]
@@ -245,6 +260,502 @@ def execute_function(instance: Instance, func_idx: int, args: list[Any]) -> Any:
         return stack[-1] if stack else None
     else:
         return tuple(stack[-len(func_type.results) :])
+
+
+def execute_function_fast(instance: Instance, func_idx: int, args: list[Any]) -> Any:
+    """Optimized function execution with inlined instruction dispatch."""
+    # Check if this is an imported function
+    if func_idx in instance.imported_funcs:
+        return instance.imported_funcs[func_idx](*args)
+
+    func = instance.funcs[func_idx]
+    if func is None:
+        raise TrapError(f"Function {func_idx} is not available (missing import?)")
+    func_type = instance.func_types[func.type_idx]
+
+    # Set up locals: params + declared locals
+    locals_list: list[Any] = list(args)
+    for valtype in func.locals:
+        if valtype in ("i32", "i64"):
+            locals_list.append(0)
+        elif valtype in ("f32", "f64"):
+            locals_list.append(0.0)
+        else:
+            locals_list.append(None)
+
+    # Execute function body with inlined dispatch
+    stack: list[Any] = []
+    labels: list[Label] = []
+    body = func.body
+    body_len = len(body)
+
+    # Add implicit function-level label
+    labels.append(
+        Label(arity=len(func_type.results), target=body_len - 1, stack_height=0)
+    )
+
+    # Get cached jump targets
+    jump_targets = get_jump_targets(func, body)
+
+    # Cache method references for speed
+    stack_append = stack.append
+    stack_pop = stack.pop
+    labels_append = labels.append
+    labels_pop = labels.pop
+
+    # Constants for masking
+    _MASK_32 = MASK_32
+    _MASK_64 = MASK_64
+
+    # Optimized main loop
+    ip = 0
+    while ip < body_len:
+        instr = body[ip]
+        op = instr.opcode
+        operand = instr.operand
+        ip += 1
+
+        # Most common opcodes first (based on profiling)
+        if op == "br":
+            # Inline do_branch for performance
+            depth = operand
+            label_idx = len(labels) - 1 - depth
+            label = labels[label_idx]
+            for _ in range(depth + 1):
+                labels_pop()
+            if label.arity > 0:
+                result_values = stack[-label.arity :]
+                del stack[label.stack_height :]
+                stack.extend(result_values)
+            else:
+                del stack[label.stack_height :]
+            if label.is_loop:
+                labels_append(label)
+            ip = label.target + 1
+            continue
+
+        if op == "br_if":
+            condition = stack_pop()
+            if condition:
+                depth = operand
+                label_idx = len(labels) - 1 - depth
+                label = labels[label_idx]
+                for _ in range(depth + 1):
+                    labels_pop()
+                if label.arity > 0:
+                    result_values = stack[-label.arity :]
+                    del stack[label.stack_height :]
+                    stack.extend(result_values)
+                else:
+                    del stack[label.stack_height :]
+                if label.is_loop:
+                    labels_append(label)
+                ip = label.target + 1
+            continue
+
+        if op == "local.get":
+            stack_append(locals_list[operand])
+            continue
+
+        if op == "local.set":
+            locals_list[operand] = stack_pop()
+            continue
+
+        if op == "local.tee":
+            locals_list[operand] = stack[-1]
+            continue
+
+        if op == "i32.const":
+            val = operand & _MASK_32
+            if val >= 0x80000000:
+                val -= 0x100000000
+            stack_append(val)
+            continue
+
+        if op == "i32.add":
+            b, a = stack_pop(), stack_pop()
+            val = (a + b) & _MASK_32
+            if val >= 0x80000000:
+                val -= 0x100000000
+            stack_append(val)
+            continue
+
+        if op == "i32.sub":
+            b, a = stack_pop(), stack_pop()
+            val = (a - b) & _MASK_32
+            if val >= 0x80000000:
+                val -= 0x100000000
+            stack_append(val)
+            continue
+
+        if op == "i32.and":
+            b, a = stack_pop(), stack_pop()
+            val = ((a & _MASK_32) & (b & _MASK_32)) & _MASK_32
+            if val >= 0x80000000:
+                val -= 0x100000000
+            stack_append(val)
+            continue
+
+        if op == "i32.or":
+            b, a = stack_pop(), stack_pop()
+            val = ((a & _MASK_32) | (b & _MASK_32)) & _MASK_32
+            if val >= 0x80000000:
+                val -= 0x100000000
+            stack_append(val)
+            continue
+
+        if op == "i32.eqz":
+            stack_append(1 if stack_pop() == 0 else 0)
+            continue
+
+        if op == "i32.eq":
+            b, a = stack_pop(), stack_pop()
+            stack_append(1 if (a & _MASK_32) == (b & _MASK_32) else 0)
+            continue
+
+        if op == "i32.ne":
+            b, a = stack_pop(), stack_pop()
+            stack_append(1 if (a & _MASK_32) != (b & _MASK_32) else 0)
+            continue
+
+        if op == "i32.lt_u":
+            b, a = stack_pop(), stack_pop()
+            stack_append(1 if (a & _MASK_32) < (b & _MASK_32) else 0)
+            continue
+
+        if op == "i32.gt_u":
+            b, a = stack_pop(), stack_pop()
+            stack_append(1 if (a & _MASK_32) > (b & _MASK_32) else 0)
+            continue
+
+        if op == "i32.le_u":
+            b, a = stack_pop(), stack_pop()
+            stack_append(1 if (a & _MASK_32) <= (b & _MASK_32) else 0)
+            continue
+
+        if op == "i32.ge_u":
+            b, a = stack_pop(), stack_pop()
+            stack_append(1 if (a & _MASK_32) >= (b & _MASK_32) else 0)
+            continue
+
+        if op == "i32.lt_s":
+            b, a = stack_pop(), stack_pop()
+            # Convert to signed
+            sa = (
+                (a & _MASK_32) - 0x100000000
+                if (a & _MASK_32) >= 0x80000000
+                else (a & _MASK_32)
+            )
+            sb = (
+                (b & _MASK_32) - 0x100000000
+                if (b & _MASK_32) >= 0x80000000
+                else (b & _MASK_32)
+            )
+            stack_append(1 if sa < sb else 0)
+            continue
+
+        if op == "i32.gt_s":
+            b, a = stack_pop(), stack_pop()
+            sa = (
+                (a & _MASK_32) - 0x100000000
+                if (a & _MASK_32) >= 0x80000000
+                else (a & _MASK_32)
+            )
+            sb = (
+                (b & _MASK_32) - 0x100000000
+                if (b & _MASK_32) >= 0x80000000
+                else (b & _MASK_32)
+            )
+            stack_append(1 if sa > sb else 0)
+            continue
+
+        if op == "i32.le_s":
+            b, a = stack_pop(), stack_pop()
+            sa = (
+                (a & _MASK_32) - 0x100000000
+                if (a & _MASK_32) >= 0x80000000
+                else (a & _MASK_32)
+            )
+            sb = (
+                (b & _MASK_32) - 0x100000000
+                if (b & _MASK_32) >= 0x80000000
+                else (b & _MASK_32)
+            )
+            stack_append(1 if sa <= sb else 0)
+            continue
+
+        if op == "i32.ge_s":
+            b, a = stack_pop(), stack_pop()
+            sa = (
+                (a & _MASK_32) - 0x100000000
+                if (a & _MASK_32) >= 0x80000000
+                else (a & _MASK_32)
+            )
+            sb = (
+                (b & _MASK_32) - 0x100000000
+                if (b & _MASK_32) >= 0x80000000
+                else (b & _MASK_32)
+            )
+            stack_append(1 if sa >= sb else 0)
+            continue
+
+        if op == "i32.mul":
+            b, a = stack_pop(), stack_pop()
+            val = (a * b) & _MASK_32
+            if val >= 0x80000000:
+                val -= 0x100000000
+            stack_append(val)
+            continue
+
+        if op == "i32.xor":
+            b, a = stack_pop(), stack_pop()
+            val = ((a & _MASK_32) ^ (b & _MASK_32)) & _MASK_32
+            if val >= 0x80000000:
+                val -= 0x100000000
+            stack_append(val)
+            continue
+
+        if op == "i32.shl":
+            b, a = stack_pop(), stack_pop()
+            val = ((a & _MASK_32) << ((b & _MASK_32) & 31)) & _MASK_32
+            if val >= 0x80000000:
+                val -= 0x100000000
+            stack_append(val)
+            continue
+
+        if op == "i32.shr_u":
+            b, a = stack_pop(), stack_pop()
+            shift = (b & _MASK_32) & 31
+            val = ((a & _MASK_32) >> shift) & _MASK_32
+            if val >= 0x80000000:
+                val -= 0x100000000
+            stack_append(val)
+            continue
+
+        if op == "i32.shr_s":
+            b, a = stack_pop(), stack_pop()
+            shift = (b & _MASK_32) & 31
+            sa = (
+                (a & _MASK_32) - 0x100000000
+                if (a & _MASK_32) >= 0x80000000
+                else (a & _MASK_32)
+            )
+            val = (sa >> shift) & _MASK_32
+            if val >= 0x80000000:
+                val -= 0x100000000
+            stack_append(val)
+            continue
+
+        if op == "i32.load":
+            align, offset = operand
+            addr = stack_pop()
+            ea = addr + offset
+            mem = instance.memories[0].data
+            if ea < 0 or ea + 4 > len(mem):
+                raise TrapError("out of bounds memory access")
+            val = int.from_bytes(mem[ea : ea + 4], "little", signed=True)
+            stack_append(val)
+            continue
+
+        if op == "i32.load8_u":
+            align, offset = operand
+            addr = stack_pop()
+            ea = addr + offset
+            mem = instance.memories[0].data
+            if ea < 0 or ea >= len(mem):
+                raise TrapError("out of bounds memory access")
+            stack_append(mem[ea])
+            continue
+
+        if op == "i32.load8_s":
+            align, offset = operand
+            addr = stack_pop()
+            ea = addr + offset
+            mem = instance.memories[0].data
+            if ea < 0 or ea >= len(mem):
+                raise TrapError("out of bounds memory access")
+            val = mem[ea]
+            if val >= 128:
+                val -= 256
+            stack_append(val)
+            continue
+
+        if op == "i32.store":
+            align, offset = operand
+            val = stack_pop()
+            addr = stack_pop()
+            ea = addr + offset
+            mem = instance.memories[0].data
+            if ea < 0 or ea + 4 > len(mem):
+                raise TrapError("out of bounds memory access")
+            mem[ea : ea + 4] = (val & _MASK_32).to_bytes(4, "little")
+            continue
+
+        if op == "i32.store8":
+            align, offset = operand
+            val = stack_pop()
+            addr = stack_pop()
+            ea = addr + offset
+            mem = instance.memories[0].data
+            if ea < 0 or ea >= len(mem):
+                raise TrapError("out of bounds memory access")
+            mem[ea] = val & 0xFF
+            continue
+
+        if op == "global.get":
+            stack_append(instance.globals[operand].value)
+            continue
+
+        if op == "global.set":
+            instance.globals[operand].value = stack_pop()
+            continue
+
+        if op == "i64.const":
+            val = operand & _MASK_64
+            if val >= 0x8000000000000000:
+                val -= 0x10000000000000000
+            stack_append(val)
+            continue
+
+        if op == "i64.add":
+            b, a = stack_pop(), stack_pop()
+            val = (a + b) & _MASK_64
+            if val >= 0x8000000000000000:
+                val -= 0x10000000000000000
+            stack_append(val)
+            continue
+
+        if op == "call":
+            func_idx = operand
+            func = instance.funcs[func_idx]
+            if func is None:
+                import_idx = func_idx
+                imp = instance.module.imports[import_idx]
+                func_type = instance.func_types[imp.desc]
+            else:
+                func_type = instance.func_types[func.type_idx]
+            n_params = len(func_type.params)
+            call_args = [stack_pop() for _ in range(n_params)][::-1]
+            call_result = execute_function_fast(instance, func_idx, call_args)
+            if call_result is not None:
+                if isinstance(call_result, tuple):
+                    stack.extend(call_result)
+                else:
+                    stack_append(call_result)
+            continue
+
+        if op == "if":
+            condition = stack_pop()
+            blocktype = operand
+            arity = 0 if blocktype == () else 1 if isinstance(blocktype, tuple) else 0
+            if ip - 1 in jump_targets:
+                else_ip, end_ip = jump_targets[ip - 1]
+            else:
+                else_ip, end_ip = find_else_end(body, ip - 1, jump_targets)
+            if condition:
+                labels_append(
+                    Label(arity=arity, target=end_ip, stack_height=len(stack))
+                )
+            else:
+                labels_append(
+                    Label(arity=arity, target=end_ip, stack_height=len(stack))
+                )
+                if else_ip is not None:
+                    ip = else_ip + 1
+                else:
+                    ip = end_ip
+            continue
+
+        if op == "else":
+            if labels:
+                label = labels[-1]
+                ip = label.target
+            continue
+
+        if op == "block":
+            blocktype = operand
+            arity = 0 if blocktype == () else 1 if isinstance(blocktype, tuple) else 0
+            end_ip = (
+                jump_targets[ip - 1][1]
+                if ip - 1 in jump_targets
+                else find_end(body, ip - 1, jump_targets)
+            )
+            labels_append(Label(arity=arity, target=end_ip, stack_height=len(stack)))
+            continue
+
+        if op == "loop":
+            blocktype = operand
+            if blocktype == ():
+                arity = 0
+            elif isinstance(blocktype, tuple):
+                arity = 1
+            elif isinstance(blocktype, int):
+                arity = len(instance.func_types[blocktype].params)
+            else:
+                arity = 0
+            end_ip = (
+                jump_targets[ip - 1][1]
+                if ip - 1 in jump_targets
+                else find_end(body, ip - 1, jump_targets)
+            )
+            labels_append(
+                Label(
+                    arity=arity,
+                    target=ip - 1,
+                    is_loop=True,
+                    stack_height=len(stack) - arity,
+                )
+            )
+            continue
+
+        if op == "end":
+            if labels:
+                labels_pop()
+            continue
+
+        if op == "drop":
+            stack_pop()
+            continue
+
+        if op == "select":
+            c = stack_pop()
+            val2 = stack_pop()
+            val1 = stack_pop()
+            stack_append(val1 if c else val2)
+            continue
+
+        if op == "nop":
+            continue
+
+        if op == "return":
+            break
+
+        # Fall back to regular instruction dispatch for less common ops
+        result = execute_instruction(
+            instr, stack, labels, locals_list, instance, body, ip, jump_targets
+        )
+
+        if result is not None:
+            if result[0] == "branch":
+                ip = result[1]
+            elif result[0] == "return":
+                break
+            elif result[0] == "call":
+                call_result = execute_function_fast(instance, result[1], result[2])
+                if call_result is not None:
+                    if isinstance(call_result, tuple):
+                        stack.extend(call_result)
+                    else:
+                        stack_append(call_result)
+
+    # Return results
+    num_results = len(func_type.results)
+    if num_results == 0:
+        return None
+    elif num_results == 1:
+        return stack[-1] if stack else None
+    else:
+        return tuple(stack[-num_results:])
 
 
 def execute_instruction(
