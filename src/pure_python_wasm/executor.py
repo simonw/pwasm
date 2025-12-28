@@ -730,6 +730,25 @@ def execute_function_fast(instance: Instance, func_idx: int, args: list[Any]) ->
         if op == "return":
             break
 
+        # Bulk memory operations (for optimized WASM builds)
+        if op == "memory.copy":
+            n = stack_pop()
+            src = stack_pop()
+            dst = stack_pop()
+            mem = instance.memories[0].data
+            if n > 0:
+                mem[dst : dst + n] = bytes(mem[src : src + n])
+            continue
+
+        if op == "memory.fill":
+            n = stack_pop()
+            val = stack_pop() & 0xFF
+            dst = stack_pop()
+            mem = instance.memories[0].data
+            if n > 0:
+                mem[dst : dst + n] = bytes([val] * n)
+            continue
+
         # Fall back to regular instruction dispatch for less common ops
         result = execute_instruction(
             instr, stack, labels, locals_list, instance, body, ip, jump_targets
@@ -1646,6 +1665,125 @@ def execute_instruction(
         n_params = len(func_type.params)
         args = [stack.pop() for _ in range(n_params)][::-1]
         return ("call", func_idx, args)
+
+    # Bulk memory operations
+    elif op == "memory.copy":
+        n = stack.pop()  # number of bytes
+        src = stack.pop()  # source address
+        dst = stack.pop()  # destination address
+        mem = instance.memories[0].data
+        if n > 0:
+            if src < 0 or src + n > len(mem) or dst < 0 or dst + n > len(mem):
+                raise TrapError("out of bounds memory access")
+            # Handle overlapping regions correctly
+            mem[dst : dst + n] = bytes(mem[src : src + n])
+
+    elif op == "memory.fill":
+        n = stack.pop()  # number of bytes
+        val = stack.pop() & 0xFF  # byte value
+        dst = stack.pop()  # destination address
+        mem = instance.memories[0].data
+        if n > 0:
+            if dst < 0 or dst + n > len(mem):
+                raise TrapError("out of bounds memory access")
+            mem[dst : dst + n] = bytes([val] * n)
+
+    elif op == "memory.init":
+        n = stack.pop()  # number of bytes
+        src = stack.pop()  # source offset in data segment
+        dst = stack.pop()  # destination address in memory
+        data_idx, mem_idx = instr.operand
+        mem = instance.memories[mem_idx].data
+        data_seg = instance.module.datas[data_idx]
+        if n > 0:
+            if src < 0 or src + n > len(data_seg.init) or dst < 0 or dst + n > len(mem):
+                raise TrapError("out of bounds memory access")
+            mem[dst : dst + n] = data_seg.init[src : src + n]
+
+    elif op == "data.drop":
+        # Mark data segment as dropped (no-op in our implementation)
+        pass
+
+    # Saturating truncation operations
+    elif op == "i32.trunc_sat_f32_s":
+        val = stack.pop()
+        if math.isnan(val):
+            stack.append(0)
+        elif val >= 2147483647.0:
+            stack.append(2147483647)
+        elif val <= -2147483648.0:
+            stack.append(-2147483648)
+        else:
+            stack.append(int(val))
+
+    elif op == "i32.trunc_sat_f32_u":
+        val = stack.pop()
+        if math.isnan(val) or val < 0:
+            stack.append(0)
+        elif val >= 4294967295.0:
+            stack.append(4294967295)
+        else:
+            stack.append(int(val))
+
+    elif op == "i32.trunc_sat_f64_s":
+        val = stack.pop()
+        if math.isnan(val):
+            stack.append(0)
+        elif val >= 2147483647.0:
+            stack.append(2147483647)
+        elif val <= -2147483648.0:
+            stack.append(-2147483648)
+        else:
+            stack.append(int(val))
+
+    elif op == "i32.trunc_sat_f64_u":
+        val = stack.pop()
+        if math.isnan(val) or val < 0:
+            stack.append(0)
+        elif val >= 4294967295.0:
+            stack.append(4294967295)
+        else:
+            stack.append(int(val))
+
+    elif op == "i64.trunc_sat_f32_s":
+        val = stack.pop()
+        if math.isnan(val):
+            stack.append(0)
+        elif val >= 9223372036854775807.0:
+            stack.append(9223372036854775807)
+        elif val <= -9223372036854775808.0:
+            stack.append(-9223372036854775808)
+        else:
+            stack.append(int(val))
+
+    elif op == "i64.trunc_sat_f32_u":
+        val = stack.pop()
+        if math.isnan(val) or val < 0:
+            stack.append(0)
+        elif val >= 18446744073709551615.0:
+            stack.append(18446744073709551615)
+        else:
+            stack.append(int(val))
+
+    elif op == "i64.trunc_sat_f64_s":
+        val = stack.pop()
+        if math.isnan(val):
+            stack.append(0)
+        elif val >= 9223372036854775807.0:
+            stack.append(9223372036854775807)
+        elif val <= -9223372036854775808.0:
+            stack.append(-9223372036854775808)
+        else:
+            stack.append(int(val))
+
+    elif op == "i64.trunc_sat_f64_u":
+        val = stack.pop()
+        if math.isnan(val) or val < 0:
+            stack.append(0)
+        elif val >= 18446744073709551615.0:
+            stack.append(18446744073709551615)
+        else:
+            stack.append(int(val))
 
     else:
         raise TrapError(f"Unimplemented instruction: {op}")

@@ -230,6 +230,21 @@ EXTENDED_PREFIX = 0xFC
 
 # Extended opcodes (after 0xFC prefix, encoded as LEB128)
 # These are virtual opcodes for internal use (add 0xFC00 to distinguish from regular opcodes)
+# Saturating truncation operations
+I32_TRUNC_SAT_F32_S = 0xFC00  # 0xFC 0
+I32_TRUNC_SAT_F32_U = 0xFC01  # 0xFC 1
+I32_TRUNC_SAT_F64_S = 0xFC02  # 0xFC 2
+I32_TRUNC_SAT_F64_U = 0xFC03  # 0xFC 3
+I64_TRUNC_SAT_F32_S = 0xFC04  # 0xFC 4
+I64_TRUNC_SAT_F32_U = 0xFC05  # 0xFC 5
+I64_TRUNC_SAT_F64_S = 0xFC06  # 0xFC 6
+I64_TRUNC_SAT_F64_U = 0xFC07  # 0xFC 7
+# Bulk memory operations
+MEMORY_INIT = 0xFC08  # 0xFC 8
+DATA_DROP = 0xFC09  # 0xFC 9
+MEMORY_COPY = 0xFC0A  # 0xFC 10
+MEMORY_FILL = 0xFC0B  # 0xFC 11
+# Table operations
 TABLE_INIT = 0xFC0C  # 0xFC 12
 ELEM_DROP = 0xFC0D  # 0xFC 13
 TABLE_COPY = 0xFC0E  # 0xFC 14
@@ -429,6 +444,20 @@ OPCODE_NAMES = {
     TABLE_GROW: "table.grow",
     TABLE_SIZE: "table.size",
     TABLE_FILL: "table.fill",
+    # Saturating truncation operations
+    I32_TRUNC_SAT_F32_S: "i32.trunc_sat_f32_s",
+    I32_TRUNC_SAT_F32_U: "i32.trunc_sat_f32_u",
+    I32_TRUNC_SAT_F64_S: "i32.trunc_sat_f64_s",
+    I32_TRUNC_SAT_F64_U: "i32.trunc_sat_f64_u",
+    I64_TRUNC_SAT_F32_S: "i64.trunc_sat_f32_s",
+    I64_TRUNC_SAT_F32_U: "i64.trunc_sat_f32_u",
+    I64_TRUNC_SAT_F64_S: "i64.trunc_sat_f64_s",
+    I64_TRUNC_SAT_F64_U: "i64.trunc_sat_f64_u",
+    # Bulk memory operations
+    MEMORY_INIT: "memory.init",
+    DATA_DROP: "data.drop",
+    MEMORY_COPY: "memory.copy",
+    MEMORY_FILL: "memory.fill",
 }
 
 # Opcodes with no immediate

@@ -170,6 +170,29 @@ def decode_extended_instruction(sub_opcode: int, reader: BinaryReader) -> Instru
 
     name = opcodes.OPCODE_NAMES[virtual_opcode]
 
+    # Saturating truncation operations (no immediates)
+    if sub_opcode <= 0x07:
+        return Instruction(name)
+
+    # Bulk memory operations
+    if sub_opcode == 0x08:  # memory.init
+        data_idx = decode_unsigned_leb128(reader)
+        mem_idx = decode_unsigned_leb128(reader)
+        return Instruction(name, (data_idx, mem_idx))
+
+    if sub_opcode == 0x09:  # data.drop
+        data_idx = decode_unsigned_leb128(reader)
+        return Instruction(name, data_idx)
+
+    if sub_opcode == 0x0A:  # memory.copy
+        dst_mem = decode_unsigned_leb128(reader)
+        src_mem = decode_unsigned_leb128(reader)
+        return Instruction(name, (dst_mem, src_mem))
+
+    if sub_opcode == 0x0B:  # memory.fill
+        mem_idx = decode_unsigned_leb128(reader)
+        return Instruction(name, mem_idx)
+
     # table.size takes a table index
     if sub_opcode == 0x10:  # table.size
         table_idx = decode_unsigned_leb128(reader)

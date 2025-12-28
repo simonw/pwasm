@@ -110,7 +110,9 @@ def save_snapshot(instance, path):
     }
     with open(path, "wb") as f:
         pickle.dump(snapshot, f)
-    print(f"Saved snapshot to {path} ({len(snapshot['memories'][0]):,} bytes of memory)")
+    print(
+        f"Saved snapshot to {path} ({len(snapshot['memories'][0]):,} bytes of memory)"
+    )
 
 
 def load_snapshot(instance, path):
@@ -120,7 +122,7 @@ def load_snapshot(instance, path):
 
     # Restore memory
     for i, mem_data in enumerate(snapshot["memories"]):
-        instance.memories[i].data[:len(mem_data)] = bytearray(mem_data)
+        instance.memories[i].data[: len(mem_data)] = bytearray(mem_data)
 
     # Restore globals
     for i, val in enumerate(snapshot["globals"]):

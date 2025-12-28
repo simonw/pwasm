@@ -62,8 +62,13 @@ def main():
 
     # Use optimized execute_function_fast
     from pure_python_wasm.executor import (
-        Label, get_jump_targets, execute_instruction,
-        execute_function_fast, MASK_32, MASK_64, find_end
+        Label,
+        get_jump_targets,
+        execute_instruction,
+        execute_function_fast,
+        MASK_32,
+        MASK_64,
+        find_end,
     )
 
     func_idx = exports["_start"]
@@ -81,7 +86,9 @@ def main():
             locals_list.append(None)
 
     stack = []
-    labels = [Label(arity=len(func_type.results), target=len(func.body) - 1, stack_height=0)]
+    labels = [
+        Label(arity=len(func_type.results), target=len(func.body) - 1, stack_height=0)
+    ]
     body = func.body
     body_len = len(body)
     jump_targets = get_jump_targets(func, body)
@@ -110,11 +117,11 @@ def main():
             for _ in range(depth + 1):
                 labels_pop()
             if label.arity > 0:
-                result_values = stack[-label.arity:]
-                del stack[label.stack_height:]
+                result_values = stack[-label.arity :]
+                del stack[label.stack_height :]
                 stack.extend(result_values)
             else:
-                del stack[label.stack_height:]
+                del stack[label.stack_height :]
             if label.is_loop:
                 labels_append(label)
             ip = label.target + 1
@@ -130,11 +137,11 @@ def main():
                 for _ in range(depth + 1):
                     labels_pop()
                 if label.arity > 0:
-                    result_values = stack[-label.arity:]
-                    del stack[label.stack_height:]
+                    result_values = stack[-label.arity :]
+                    del stack[label.stack_height :]
                     stack.extend(result_values)
                 else:
-                    del stack[label.stack_height:]
+                    del stack[label.stack_height :]
                 if label.is_loop:
                     labels_append(label)
                 ip = label.target + 1
@@ -178,8 +185,19 @@ def main():
                 arity = len(instance.func_types[blocktype].params)
             else:
                 arity = 0
-            end_ip = jump_targets[ip - 1][1] if ip - 1 in jump_targets else find_end(body, ip - 1, jump_targets)
-            labels_append(Label(arity=arity, target=ip - 1, is_loop=True, stack_height=len(stack) - arity))
+            end_ip = (
+                jump_targets[ip - 1][1]
+                if ip - 1 in jump_targets
+                else find_end(body, ip - 1, jump_targets)
+            )
+            labels_append(
+                Label(
+                    arity=arity,
+                    target=ip - 1,
+                    is_loop=True,
+                    stack_height=len(stack) - arity,
+                )
+            )
             instruction_count += 1
             continue
 
@@ -213,7 +231,9 @@ def main():
         if instruction_count % 50000 == 0:
             elapsed = time.time() - start
             if elapsed > max_time:
-                print(f"  Stopped after {instruction_count:,} instructions in {elapsed:.2f}s")
+                print(
+                    f"  Stopped after {instruction_count:,} instructions in {elapsed:.2f}s"
+                )
                 print(f"  Rate: {instruction_count / elapsed:,.0f} instructions/second")
                 break
 

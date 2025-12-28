@@ -3,7 +3,11 @@
 
 import pure_python_wasm
 from pure_python_wasm.executor import (
-    Label, get_jump_targets, execute_instruction, MASK_32, find_end
+    Label,
+    get_jump_targets,
+    execute_instruction,
+    MASK_32,
+    find_end,
 )
 from pure_python_wasm.errors import TrapError
 from pathlib import Path
@@ -48,7 +52,9 @@ def execute_function_instrumented(instance, func_idx, args):
     body = func.body
     body_len = len(body)
 
-    labels.append(Label(arity=len(func_type.results), target=body_len - 1, stack_height=0))
+    labels.append(
+        Label(arity=len(func_type.results), target=body_len - 1, stack_height=0)
+    )
     jump_targets = get_jump_targets(func, body)
 
     # Cache for speed
@@ -75,11 +81,16 @@ def execute_function_instrumented(instance, func_idx, args):
             elapsed = now - _start_time
             rate = _instruction_count / elapsed if elapsed > 0 else 0
             if now - _last_report >= 1.0:
-                print(f"  Progress: {_instruction_count:,} instructions, {rate:,.0f}/sec", flush=True)
+                print(
+                    f"  Progress: {_instruction_count:,} instructions, {rate:,.0f}/sec",
+                    flush=True,
+                )
                 _last_report = now
             if elapsed > _max_time:
                 _should_stop = True
-                raise TimeoutError(f"Stopped after {_instruction_count:,} instructions in {elapsed:.2f}s\n  Rate: {rate:,.0f}/sec")
+                raise TimeoutError(
+                    f"Stopped after {_instruction_count:,} instructions in {elapsed:.2f}s\n  Rate: {rate:,.0f}/sec"
+                )
 
         # Inline most common ops
         if op == "br":
@@ -89,11 +100,11 @@ def execute_function_instrumented(instance, func_idx, args):
             for _ in range(depth + 1):
                 labels_pop()
             if label.arity > 0:
-                result_values = stack[-label.arity:]
-                del stack[label.stack_height:]
+                result_values = stack[-label.arity :]
+                del stack[label.stack_height :]
                 stack.extend(result_values)
             else:
-                del stack[label.stack_height:]
+                del stack[label.stack_height :]
             if label.is_loop:
                 labels_append(label)
             ip = label.target + 1
@@ -108,11 +119,11 @@ def execute_function_instrumented(instance, func_idx, args):
                 for _ in range(depth + 1):
                     labels_pop()
                 if label.arity > 0:
-                    result_values = stack[-label.arity:]
-                    del stack[label.stack_height:]
+                    result_values = stack[-label.arity :]
+                    del stack[label.stack_height :]
                     stack.extend(result_values)
                 else:
-                    del stack[label.stack_height:]
+                    del stack[label.stack_height :]
                 if label.is_loop:
                     labels_append(label)
                 ip = label.target + 1
@@ -167,14 +178,29 @@ def execute_function_instrumented(instance, func_idx, args):
                 arity = len(instance.func_types[blocktype].params)
             else:
                 arity = 0
-            end_ip = jump_targets[ip - 1][1] if ip - 1 in jump_targets else find_end(body, ip - 1, jump_targets)
-            labels_append(Label(arity=arity, target=ip - 1, is_loop=True, stack_height=len(stack) - arity))
+            end_ip = (
+                jump_targets[ip - 1][1]
+                if ip - 1 in jump_targets
+                else find_end(body, ip - 1, jump_targets)
+            )
+            labels_append(
+                Label(
+                    arity=arity,
+                    target=ip - 1,
+                    is_loop=True,
+                    stack_height=len(stack) - arity,
+                )
+            )
             continue
 
         if op == "block":
             blocktype = operand
             arity = 0 if blocktype == () else 1 if isinstance(blocktype, tuple) else 0
-            end_ip = jump_targets[ip - 1][1] if ip - 1 in jump_targets else find_end(body, ip - 1, jump_targets)
+            end_ip = (
+                jump_targets[ip - 1][1]
+                if ip - 1 in jump_targets
+                else find_end(body, ip - 1, jump_targets)
+            )
             labels_append(Label(arity=arity, target=end_ip, stack_height=len(stack)))
             continue
 
@@ -207,7 +233,9 @@ def execute_function_instrumented(instance, func_idx, args):
             elif result[0] == "return":
                 break
             elif result[0] == "call":
-                call_result = execute_function_instrumented(instance, result[1], result[2])
+                call_result = execute_function_instrumented(
+                    instance, result[1], result[2]
+                )
                 if call_result is not None:
                     if isinstance(call_result, tuple):
                         stack.extend(call_result)
@@ -288,7 +316,9 @@ def main():
     except Exception as e:
         elapsed = time.monotonic() - _start_time
         rate = _instruction_count / elapsed if elapsed > 0 else 0
-        print(f"\n  Error after {_instruction_count:,} instructions in {elapsed:.2f}s: {e}")
+        print(
+            f"\n  Error after {_instruction_count:,} instructions in {elapsed:.2f}s: {e}"
+        )
         print(f"  Rate: {rate:,.0f} instructions/second")
 
     return 0

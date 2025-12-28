@@ -3,7 +3,11 @@
 
 import pure_python_wasm
 from pure_python_wasm.executor import (
-    Label, get_jump_targets, MASK_32, find_end, execute_function_fast
+    Label,
+    get_jump_targets,
+    MASK_32,
+    find_end,
+    execute_function_fast,
 )
 from pure_python_wasm.executor_numpy import execute_function_numpy
 from pure_python_wasm.errors import TrapError
@@ -42,7 +46,9 @@ def execute_numpy_instrumented(instance, func_idx, args):
     stack = np.zeros(1024, dtype=np.int64)
     sp = 0
 
-    labels = [Label(arity=len(func_type.results), target=len(func.body) - 1, stack_height=0)]
+    labels = [
+        Label(arity=len(func_type.results), target=len(func.body) - 1, stack_height=0)
+    ]
     body = func.body
     body_len = len(body)
     jump_targets = get_jump_targets(func, body)
@@ -63,7 +69,10 @@ def execute_numpy_instrumented(instance, func_idx, args):
             now = time.monotonic()
             elapsed = now - _start_time
             rate = _instruction_count / elapsed if elapsed > 0 else 0
-            print(f"  Progress: {_instruction_count:,} instructions, {rate:,.0f}/sec", flush=True)
+            print(
+                f"  Progress: {_instruction_count:,} instructions, {rate:,.0f}/sec",
+                flush=True,
+            )
             if elapsed > _max_time:
                 _should_stop = True
                 raise TimeoutError(f"Stopped after {_instruction_count:,} instructions")
@@ -251,7 +260,7 @@ def execute_numpy_instrumented(instance, func_idx, args):
             align, offset = operand
             addr = int(stack[sp - 1]) + offset
             mem = instance.memories[0].data
-            val = int.from_bytes(mem[addr:addr + 4], "little", signed=True)
+            val = int.from_bytes(mem[addr : addr + 4], "little", signed=True)
             stack[sp - 1] = val
             continue
 
@@ -261,7 +270,7 @@ def execute_numpy_instrumented(instance, func_idx, args):
             val = int(stack[sp + 1]) & MASK_32
             addr = int(stack[sp]) + offset
             mem = instance.memories[0].data
-            mem[addr:addr + 4] = val.to_bytes(4, "little")
+            mem[addr : addr + 4] = val.to_bytes(4, "little")
             continue
 
         if op == "global.get":
@@ -315,7 +324,11 @@ def execute_numpy_instrumented(instance, func_idx, args):
         if op == "block":
             blocktype = operand
             arity = 0 if blocktype == () else 1 if isinstance(blocktype, tuple) else 0
-            end_ip = jump_targets[ip - 1][1] if ip - 1 in jump_targets else find_end(body, ip - 1, jump_targets)
+            end_ip = (
+                jump_targets[ip - 1][1]
+                if ip - 1 in jump_targets
+                else find_end(body, ip - 1, jump_targets)
+            )
             labels.append(Label(arity=arity, target=end_ip, stack_height=sp))
             continue
 
@@ -329,7 +342,9 @@ def execute_numpy_instrumented(instance, func_idx, args):
                 arity = len(instance.func_types[blocktype].params)
             else:
                 arity = 0
-            labels.append(Label(arity=arity, target=ip - 1, is_loop=True, stack_height=sp - arity))
+            labels.append(
+                Label(arity=arity, target=ip - 1, is_loop=True, stack_height=sp - arity)
+            )
             continue
 
         if op == "if":
@@ -341,6 +356,7 @@ def execute_numpy_instrumented(instance, func_idx, args):
                 else_ip, end_ip = jump_targets[ip - 1]
             else:
                 from pure_python_wasm.executor import find_else_end
+
                 else_ip, end_ip = find_else_end(body, ip - 1, jump_targets)
             if condition:
                 labels.append(Label(arity=arity, target=end_ip, stack_height=sp))
@@ -474,7 +490,9 @@ def main():
     except Exception as e:
         elapsed = time.monotonic() - _start_time
         rate = _instruction_count / elapsed if elapsed > 0 else 0
-        print(f"\n  Error after {_instruction_count:,} instructions in {elapsed:.2f}s: {e}")
+        print(
+            f"\n  Error after {_instruction_count:,} instructions in {elapsed:.2f}s: {e}"
+        )
         print(f"  Rate: {rate:,.0f} instructions/second")
 
     return 0

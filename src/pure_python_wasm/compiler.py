@@ -40,7 +40,9 @@ def compile_function(func: Function, instance: Instance, func_idx: int) -> calla
     lines.append(f"{indent}stack = []")
     lines.append(f"{indent}MASK_32 = 0xFFFFFFFF")
     lines.append(f"{indent}MASK_64 = 0xFFFFFFFFFFFFFFFF")
-    lines.append(f"{indent}mem = instance.memories[0].data if instance.memories else None")
+    lines.append(
+        f"{indent}mem = instance.memories[0].data if instance.memories else None"
+    )
 
     # Compile instructions using labeled blocks
     current_indent = indent
@@ -125,7 +127,9 @@ def compile_function(func: Function, instance: Instance, func_idx: int) -> calla
 
         elif op == "i32.lt_u":
             lines.append(f"{current_indent}_b, _a = stack.pop(), stack.pop()")
-            lines.append(f"{current_indent}stack.append(1 if (_a & MASK_32) < (_b & MASK_32) else 0)")
+            lines.append(
+                f"{current_indent}stack.append(1 if (_a & MASK_32) < (_b & MASK_32) else 0)"
+            )
 
         elif op == "i32.gt_s":
             lines.append(f"{current_indent}_b, _a = stack.pop(), stack.pop()")
@@ -133,7 +137,9 @@ def compile_function(func: Function, instance: Instance, func_idx: int) -> calla
 
         elif op == "i32.gt_u":
             lines.append(f"{current_indent}_b, _a = stack.pop(), stack.pop()")
-            lines.append(f"{current_indent}stack.append(1 if (_a & MASK_32) > (_b & MASK_32) else 0)")
+            lines.append(
+                f"{current_indent}stack.append(1 if (_a & MASK_32) > (_b & MASK_32) else 0)"
+            )
 
         elif op == "i32.le_s":
             lines.append(f"{current_indent}_b, _a = stack.pop(), stack.pop()")
@@ -141,7 +147,9 @@ def compile_function(func: Function, instance: Instance, func_idx: int) -> calla
 
         elif op == "i32.le_u":
             lines.append(f"{current_indent}_b, _a = stack.pop(), stack.pop()")
-            lines.append(f"{current_indent}stack.append(1 if (_a & MASK_32) <= (_b & MASK_32) else 0)")
+            lines.append(
+                f"{current_indent}stack.append(1 if (_a & MASK_32) <= (_b & MASK_32) else 0)"
+            )
 
         elif op == "i32.ge_s":
             lines.append(f"{current_indent}_b, _a = stack.pop(), stack.pop()")
@@ -149,12 +157,16 @@ def compile_function(func: Function, instance: Instance, func_idx: int) -> calla
 
         elif op == "i32.ge_u":
             lines.append(f"{current_indent}_b, _a = stack.pop(), stack.pop()")
-            lines.append(f"{current_indent}stack.append(1 if (_a & MASK_32) >= (_b & MASK_32) else 0)")
+            lines.append(
+                f"{current_indent}stack.append(1 if (_a & MASK_32) >= (_b & MASK_32) else 0)"
+            )
 
         elif op == "i32.load":
             align, offset = operand
             lines.append(f"{current_indent}_addr = stack.pop() + {offset}")
-            lines.append(f"{current_indent}stack.append(int.from_bytes(mem[_addr:_addr+4], 'little', signed=True))")
+            lines.append(
+                f"{current_indent}stack.append(int.from_bytes(mem[_addr:_addr+4], 'little', signed=True))"
+            )
 
         elif op == "i32.load8_u":
             align, offset = operand
@@ -172,7 +184,9 @@ def compile_function(func: Function, instance: Instance, func_idx: int) -> calla
             align, offset = operand
             lines.append(f"{current_indent}_v = stack.pop()")
             lines.append(f"{current_indent}_addr = stack.pop() + {offset}")
-            lines.append(f"{current_indent}mem[_addr:_addr+4] = (_v & MASK_32).to_bytes(4, 'little')")
+            lines.append(
+                f"{current_indent}mem[_addr:_addr+4] = (_v & MASK_32).to_bytes(4, 'little')"
+            )
 
         elif op == "i32.store8":
             align, offset = operand
@@ -190,10 +204,14 @@ def compile_function(func: Function, instance: Instance, func_idx: int) -> calla
             lines.append(f"{current_indent}stack.append(_v1 if _c else _v2)")
 
         elif op == "global.get":
-            lines.append(f"{current_indent}stack.append(instance.globals[{operand}].value)")
+            lines.append(
+                f"{current_indent}stack.append(instance.globals[{operand}].value)"
+            )
 
         elif op == "global.set":
-            lines.append(f"{current_indent}instance.globals[{operand}].value = stack.pop()")
+            lines.append(
+                f"{current_indent}instance.globals[{operand}].value = stack.pop()"
+            )
 
         elif op == "block":
             label_id = new_label()
@@ -246,7 +264,9 @@ def compile_function(func: Function, instance: Instance, func_idx: int) -> calla
                     target = label_stack[-(depth + 1)]
                     label_id, is_loop, _ = target
                     if is_loop:
-                        lines.append(f"{current_indent}continue  # br to loop {label_id}")
+                        lines.append(
+                            f"{current_indent}continue  # br to loop {label_id}"
+                        )
                     else:
                         lines.append(f"{current_indent}break  # br {depth}")
 
@@ -258,7 +278,9 @@ def compile_function(func: Function, instance: Instance, func_idx: int) -> calla
                     label_id, is_loop, _ = target
                     lines.append(f"{current_indent}if stack.pop():")
                     if is_loop:
-                        lines.append(f"{current_indent}    continue  # br_if to loop {label_id}")
+                        lines.append(
+                            f"{current_indent}    continue  # br_if to loop {label_id}"
+                        )
                     else:
                         lines.append(f"{current_indent}    break  # br_if {depth}")
 
@@ -303,6 +325,7 @@ def compile_function(func: Function, instance: Instance, func_idx: int) -> calla
     def make_call_func(inst):
         def call_func(func_idx, stack):
             from .executor import execute_function_fast
+
             func = inst.funcs[func_idx]
             if func is None:
                 if func_idx in inst.imported_funcs:
@@ -317,6 +340,7 @@ def compile_function(func: Function, instance: Instance, func_idx: int) -> calla
             n = len(ft.params)
             args = [stack.pop() for _ in range(n)][::-1]
             return execute_function_fast(inst, func_idx, args)
+
         return call_func
 
     call_func = make_call_func(instance)

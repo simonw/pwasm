@@ -13,8 +13,13 @@ import numpy as np
 from typing import Any
 from .types import Function, FuncType
 from .executor import (
-    Instance, Label, get_jump_targets, find_end, find_else_end,
-    MASK_32, MASK_64
+    Instance,
+    Label,
+    get_jump_targets,
+    find_end,
+    find_else_end,
+    MASK_32,
+    MASK_64,
 )
 from .errors import TrapError
 
@@ -47,7 +52,9 @@ def execute_function_numpy(instance: Instance, func_idx: int, args: list[Any]) -
     body = func.body
     body_len = len(body)
 
-    labels.append(Label(arity=len(func_type.results), target=body_len - 1, stack_height=0))
+    labels.append(
+        Label(arity=len(func_type.results), target=body_len - 1, stack_height=0)
+    )
     jump_targets = get_jump_targets(func, body)
 
     # Pre-compute memory view if available
@@ -216,7 +223,7 @@ def execute_function_numpy(instance: Instance, func_idx: int, args: list[Any]) -
             addr = int(stack[sp]) + offset
             sp += 1
             mem = instance.memories[0].data
-            val = int.from_bytes(mem[addr:addr + 4], "little", signed=True)
+            val = int.from_bytes(mem[addr : addr + 4], "little", signed=True)
             stack[sp - 1] = val
             continue
 
@@ -241,7 +248,7 @@ def execute_function_numpy(instance: Instance, func_idx: int, args: list[Any]) -
             val = int(stack[sp + 1]) & MASK_32
             addr = int(stack[sp]) + offset
             mem = instance.memories[0].data
-            mem[addr:addr + 4] = val.to_bytes(4, "little")
+            mem[addr : addr + 4] = val.to_bytes(4, "little")
             continue
 
         if op == "i32.store8":
@@ -303,7 +310,11 @@ def execute_function_numpy(instance: Instance, func_idx: int, args: list[Any]) -
         if op == "block":
             blocktype = operand
             arity = 0 if blocktype == () else 1 if isinstance(blocktype, tuple) else 0
-            end_ip = jump_targets[ip - 1][1] if ip - 1 in jump_targets else find_end(body, ip - 1, jump_targets)
+            end_ip = (
+                jump_targets[ip - 1][1]
+                if ip - 1 in jump_targets
+                else find_end(body, ip - 1, jump_targets)
+            )
             labels.append(Label(arity=arity, target=end_ip, stack_height=sp))
             continue
 
@@ -317,7 +328,9 @@ def execute_function_numpy(instance: Instance, func_idx: int, args: list[Any]) -
                 arity = len(instance.func_types[blocktype].params)
             else:
                 arity = 0
-            labels.append(Label(arity=arity, target=ip - 1, is_loop=True, stack_height=sp - arity))
+            labels.append(
+                Label(arity=arity, target=ip - 1, is_loop=True, stack_height=sp - arity)
+            )
             continue
 
         if op == "if":
