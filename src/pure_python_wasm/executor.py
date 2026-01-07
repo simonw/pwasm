@@ -1,4 +1,10 @@
-"""WebAssembly bytecode executor/interpreter."""
+"""WebAssembly bytecode executor/interpreter.
+
+Optimized version with:
+- Dictionary-based instruction dispatch
+- Pre-computed control flow targets
+- Inlined integer conversion operations
+"""
 
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -7,38 +13,42 @@ from .types import Module, Function, FuncType, Instruction, Export, Memory, Glob
 from .errors import TrapError
 
 
-# Mask for 32-bit values
-MASK_32 = 0xFFFFFFFF
-MASK_64 = 0xFFFFFFFFFFFFFFFF
+# Mask for 32-bit values - cached as module-level for faster access
+_MASK_32 = 0xFFFFFFFF
+_MASK_64 = 0xFFFFFFFFFFFFFFFF
+_SIGN_32 = 0x80000000
+_OVERFLOW_32 = 0x100000000
+_SIGN_64 = 0x8000000000000000
+_OVERFLOW_64 = 0x10000000000000000
 
 
 def to_i32(value: int) -> int:
     """Convert to signed 32-bit integer."""
-    value = value & MASK_32
-    if value >= 0x80000000:
-        value -= 0x100000000
+    value = value & _MASK_32
+    if value >= _SIGN_32:
+        value -= _OVERFLOW_32
     return value
 
 
 def to_u32(value: int) -> int:
     """Convert to unsigned 32-bit integer."""
-    return value & MASK_32
+    return value & _MASK_32
 
 
 def to_i64(value: int) -> int:
     """Convert to signed 64-bit integer."""
-    value = value & MASK_64
-    if value >= 0x8000000000000000:
-        value -= 0x10000000000000000
+    value = value & _MASK_64
+    if value >= _SIGN_64:
+        value -= _OVERFLOW_64
     return value
 
 
 def to_u64(value: int) -> int:
     """Convert to unsigned 64-bit integer."""
-    return value & MASK_64
+    return value & _MASK_64
 
 
-@dataclass
+@dataclass(slots=True)
 class Label:
     """A control flow label for block/loop/if."""
 
@@ -47,7 +57,7 @@ class Label:
     is_loop: bool = False  # True if this is a loop label
 
 
-@dataclass
+@dataclass(slots=True)
 class Frame:
     """A call frame for a function invocation."""
 
@@ -57,7 +67,7 @@ class Frame:
     module: "Instance"
 
 
-@dataclass
+@dataclass(slots=True)
 class MemoryInstance:
     """Runtime memory instance."""
 
@@ -83,7 +93,7 @@ class MemoryInstance:
         return old_size
 
 
-@dataclass
+@dataclass(slots=True)
 class GlobalInstance:
     """Runtime global variable instance."""
 
@@ -95,14 +105,14 @@ class ExportNamespace:
     """Namespace for accessing exported functions."""
 
     def __init__(self, instance: "Instance") -> None:
-        self._instance = instance
-        self._exports: dict[str, Any] = {}
+        object.__setattr__(self, "_instance", instance)
+        object.__setattr__(self, "_exports", {})
 
     def _add(self, name: str, value: Any) -> None:
         # Replace invalid Python identifiers
         safe_name = name.replace("-", "_")
         if safe_name.isidentifier():
-            setattr(self, safe_name, value)
+            object.__setattr__(self, safe_name, value)
         self._exports[name] = value
 
     def __getattr__(self, name: str) -> Any:
@@ -128,10 +138,14 @@ class Instance:
     memories: list[MemoryInstance]
     globals: list[GlobalInstance]
     exports: ExportNamespace = field(init=False)
+    # Pre-computed control flow targets
+    _control_flow_cache: dict = field(init=False, default_factory=dict)
 
     def __post_init__(self) -> None:
         self.exports = ExportNamespace(self)
+        self._control_flow_cache = {}
         self._setup_exports()
+        self._precompute_control_flow()
 
     def _setup_exports(self) -> None:
         """Set up export accessors."""
@@ -154,6 +168,61 @@ class Instance:
 
         return wrapper
 
+    def _precompute_control_flow(self) -> None:
+        """Pre-compute control flow targets for all functions."""
+        for func_idx, func in enumerate(self.funcs):
+            body = func.body
+            body_len = len(body)
+            cache = {}
+
+            for ip in range(body_len):
+                instr = body[ip]
+                if instr.opcode in ("block", "loop"):
+                    end_ip = _find_end_fast(body, ip + 1, body_len)
+                    cache[ip] = end_ip
+                elif instr.opcode == "if":
+                    else_ip, end_ip = _find_else_end_fast(body, ip + 1, body_len)
+                    cache[ip] = (else_ip, end_ip)
+
+            self._control_flow_cache[func_idx] = cache
+
+
+def _find_end_fast(body: list[Instruction], start_ip: int, body_len: int) -> int:
+    """Find the matching 'end' instruction for a block/loop starting at start_ip."""
+    depth = 1
+    ip = start_ip
+    while ip < body_len:
+        op = body[ip].opcode
+        if op == "block" or op == "loop" or op == "if":
+            depth += 1
+        elif op == "end":
+            depth -= 1
+            if depth == 0:
+                return ip
+        ip += 1
+    raise TrapError("No matching end found")
+
+
+def _find_else_end_fast(
+    body: list[Instruction], start_ip: int, body_len: int
+) -> tuple[int | None, int]:
+    """Find 'else' and 'end' for an if starting at start_ip."""
+    depth = 1
+    ip = start_ip
+    else_ip = None
+    while ip < body_len:
+        op = body[ip].opcode
+        if op == "block" or op == "loop" or op == "if":
+            depth += 1
+        elif op == "else" and depth == 1:
+            else_ip = ip
+        elif op == "end":
+            depth -= 1
+            if depth == 0:
+                return else_ip, ip
+        ip += 1
+    raise TrapError("No matching end found for if")
+
 
 def execute_function(instance: Instance, func_idx: int, args: list[Any]) -> Any:
     """Execute a function and return its result(s)."""
@@ -165,9 +234,9 @@ def execute_function(instance: Instance, func_idx: int, args: list[Any]) -> Any:
 
     # Add declared locals (initialized to zero)
     for valtype in func.locals:
-        if valtype in ("i32", "i64"):
+        if valtype == "i32" or valtype == "i64":
             locals_list.append(0)
-        elif valtype in ("f32", "f64"):
+        elif valtype == "f32" or valtype == "f64":
             locals_list.append(0.0)
         else:
             locals_list.append(None)
@@ -176,324 +245,457 @@ def execute_function(instance: Instance, func_idx: int, args: list[Any]) -> Any:
     stack: list[Any] = []
     labels: list[Label] = []
 
+    # Cache frequently accessed values
+    body = func.body
+    body_len = len(body)
+    cf_cache = instance._control_flow_cache.get(func_idx, {})
+    result_count = len(func_type.results)
+
     # Add implicit function-level label
-    labels.append(Label(arity=len(func_type.results), target=len(func.body) - 1))
+    labels.append(Label(arity=result_count, target=body_len - 1))
 
     ip = 0  # Instruction pointer
-    body = func.body
 
-    while ip < len(body):
+    # Inline constants for faster access
+    mask_32 = _MASK_32
+    sign_32 = _SIGN_32
+    overflow_32 = _OVERFLOW_32
+
+    while ip < body_len:
         instr = body[ip]
+        op = instr.opcode
         ip += 1
 
-        # Execute instruction
-        result = execute_instruction(
-            instr, stack, labels, locals_list, instance, body, ip
-        )
+        # Use a dispatch approach with early returns for common ops
+        # Most common operations first for branch prediction
 
-        if result is not None:
-            if result[0] == "branch":
-                ip = result[1]
-            elif result[0] == "return":
-                break
-            elif result[0] == "call":
-                # Recursive call
-                call_func_idx = result[1]
-                call_args = result[2]
-                call_result = execute_function(instance, call_func_idx, call_args)
-                if call_result is not None:
-                    if isinstance(call_result, tuple):
-                        stack.extend(call_result)
-                    else:
-                        stack.append(call_result)
+        if op == "local.get":
+            stack.append(locals_list[instr.operand])
+            continue
 
-    # Return results
-    if len(func_type.results) == 0:
-        return None
-    elif len(func_type.results) == 1:
-        return stack[-1] if stack else None
-    else:
-        return tuple(stack[-len(func_type.results) :])
+        if op == "local.set":
+            locals_list[instr.operand] = stack.pop()
+            continue
 
+        if op == "i32.const":
+            v = instr.operand & mask_32
+            if v >= sign_32:
+                v -= overflow_32
+            stack.append(v)
+            continue
 
-def execute_instruction(
-    instr: Instruction,
-    stack: list[Any],
-    labels: list[Label],
-    locals_list: list[Any],
-    instance: Instance,
-    body: list[Instruction],
-    ip: int,
-) -> tuple | None:
-    """Execute a single instruction. Returns control flow action or None."""
-    op = instr.opcode
+        if op == "i32.add":
+            b = stack.pop()
+            a = stack.pop()
+            v = (a + b) & mask_32
+            if v >= sign_32:
+                v -= overflow_32
+            stack.append(v)
+            continue
 
-    # Constants
-    if op == "i32.const":
-        stack.append(to_i32(instr.operand))
-    elif op == "i64.const":
-        stack.append(to_i64(instr.operand))
-    elif op == "f32.const":
-        stack.append(float(instr.operand))
-    elif op == "f64.const":
-        stack.append(float(instr.operand))
+        if op == "i32.sub":
+            b = stack.pop()
+            a = stack.pop()
+            v = (a - b) & mask_32
+            if v >= sign_32:
+                v -= overflow_32
+            stack.append(v)
+            continue
 
-    # Local variables
-    elif op == "local.get":
-        stack.append(locals_list[instr.operand])
-    elif op == "local.set":
-        locals_list[instr.operand] = stack.pop()
-    elif op == "local.tee":
-        locals_list[instr.operand] = stack[-1]
+        if op == "i32.mul":
+            b = stack.pop()
+            a = stack.pop()
+            v = (a * b) & mask_32
+            if v >= sign_32:
+                v -= overflow_32
+            stack.append(v)
+            continue
 
-    # Global variables
-    elif op == "global.get":
-        stack.append(instance.globals[instr.operand].value)
-    elif op == "global.set":
-        g = instance.globals[instr.operand]
-        if not g.mutable:
-            raise TrapError("Cannot set immutable global")
-        g.value = stack.pop()
+        if op == "local.tee":
+            locals_list[instr.operand] = stack[-1]
+            continue
 
-    # Parametric
-    elif op == "drop":
-        stack.pop()
-    elif op == "select":
-        c = stack.pop()
-        val2 = stack.pop()
-        val1 = stack.pop()
-        stack.append(val1 if c else val2)
+        if op == "end":
+            if labels:
+                labels.pop()
+            continue
 
-    # i32 arithmetic
-    elif op == "i32.add":
-        b, a = stack.pop(), stack.pop()
-        stack.append(to_i32(a + b))
-    elif op == "i32.sub":
-        b, a = stack.pop(), stack.pop()
-        stack.append(to_i32(a - b))
-    elif op == "i32.mul":
-        b, a = stack.pop(), stack.pop()
-        stack.append(to_i32(a * b))
-    elif op == "i32.div_s":
-        b, a = stack.pop(), stack.pop()
-        if b == 0:
-            raise TrapError("integer divide by zero")
-        if a == -0x80000000 and b == -1:
-            raise TrapError("integer overflow")
-        # Python division truncates toward negative infinity, we need toward zero
-        result = abs(a) // abs(b)
-        if (a < 0) != (b < 0):
-            result = -result
-        stack.append(to_i32(result))
-    elif op == "i32.div_u":
-        b, a = stack.pop(), stack.pop()
-        if b == 0:
-            raise TrapError("integer divide by zero")
-        stack.append(to_u32(a) // to_u32(b))
-    elif op == "i32.rem_s":
-        b, a = stack.pop(), stack.pop()
-        if b == 0:
-            raise TrapError("integer divide by zero")
-        # Python's % differs from C's for negative numbers
-        result = abs(a) % abs(b)
-        if a < 0:
-            result = -result
-        stack.append(to_i32(result))
-    elif op == "i32.rem_u":
-        b, a = stack.pop(), stack.pop()
-        if b == 0:
-            raise TrapError("integer divide by zero")
-        stack.append(to_u32(a) % to_u32(b))
+        if op == "br_if":
+            condition = stack.pop()
+            if condition:
+                depth = instr.operand
+                label_idx = len(labels) - 1 - depth
+                label = labels[label_idx]
+                for _ in range(depth + 1):
+                    labels.pop()
+                if label.is_loop:
+                    labels.append(label)
+                ip = label.target + 1
+            continue
 
-    # i32 bitwise
-    elif op == "i32.and":
-        b, a = stack.pop(), stack.pop()
-        stack.append(to_i32(to_u32(a) & to_u32(b)))
-    elif op == "i32.or":
-        b, a = stack.pop(), stack.pop()
-        stack.append(to_i32(to_u32(a) | to_u32(b)))
-    elif op == "i32.xor":
-        b, a = stack.pop(), stack.pop()
-        stack.append(to_i32(to_u32(a) ^ to_u32(b)))
-    elif op == "i32.shl":
-        b, a = stack.pop(), stack.pop()
-        stack.append(to_i32(to_u32(a) << (to_u32(b) & 31)))
-    elif op == "i32.shr_s":
-        b, a = stack.pop(), stack.pop()
-        shift = to_u32(b) & 31
-        stack.append(to_i32(a >> shift))
-    elif op == "i32.shr_u":
-        b, a = stack.pop(), stack.pop()
-        shift = to_u32(b) & 31
-        stack.append(to_i32(to_u32(a) >> shift))
-    elif op == "i32.rotl":
-        b, a = stack.pop(), stack.pop()
-        shift = to_u32(b) & 31
-        ua = to_u32(a)
-        stack.append(to_i32((ua << shift) | (ua >> (32 - shift))))
-    elif op == "i32.rotr":
-        b, a = stack.pop(), stack.pop()
-        shift = to_u32(b) & 31
-        ua = to_u32(a)
-        stack.append(to_i32((ua >> shift) | (ua << (32 - shift))))
-
-    # i32 unary
-    elif op == "i32.clz":
-        a = to_u32(stack.pop())
-        if a == 0:
-            stack.append(32)
-        else:
-            stack.append(32 - a.bit_length())
-    elif op == "i32.ctz":
-        a = to_u32(stack.pop())
-        if a == 0:
-            stack.append(32)
-        else:
-            count = 0
-            while (a & 1) == 0:
-                count += 1
-                a >>= 1
-            stack.append(count)
-    elif op == "i32.popcnt":
-        a = to_u32(stack.pop())
-        stack.append(bin(a).count("1"))
-
-    # i32 comparison
-    elif op == "i32.eqz":
-        stack.append(1 if stack.pop() == 0 else 0)
-    elif op == "i32.eq":
-        b, a = stack.pop(), stack.pop()
-        stack.append(1 if to_i32(a) == to_i32(b) else 0)
-    elif op == "i32.ne":
-        b, a = stack.pop(), stack.pop()
-        stack.append(1 if to_i32(a) != to_i32(b) else 0)
-    elif op == "i32.lt_s":
-        b, a = stack.pop(), stack.pop()
-        stack.append(1 if to_i32(a) < to_i32(b) else 0)
-    elif op == "i32.lt_u":
-        b, a = stack.pop(), stack.pop()
-        stack.append(1 if to_u32(a) < to_u32(b) else 0)
-    elif op == "i32.gt_s":
-        b, a = stack.pop(), stack.pop()
-        stack.append(1 if to_i32(a) > to_i32(b) else 0)
-    elif op == "i32.gt_u":
-        b, a = stack.pop(), stack.pop()
-        stack.append(1 if to_u32(a) > to_u32(b) else 0)
-    elif op == "i32.le_s":
-        b, a = stack.pop(), stack.pop()
-        stack.append(1 if to_i32(a) <= to_i32(b) else 0)
-    elif op == "i32.le_u":
-        b, a = stack.pop(), stack.pop()
-        stack.append(1 if to_u32(a) <= to_u32(b) else 0)
-    elif op == "i32.ge_s":
-        b, a = stack.pop(), stack.pop()
-        stack.append(1 if to_i32(a) >= to_i32(b) else 0)
-    elif op == "i32.ge_u":
-        b, a = stack.pop(), stack.pop()
-        stack.append(1 if to_u32(a) >= to_u32(b) else 0)
-
-    # Control flow
-    elif op == "nop":
-        pass
-    elif op == "unreachable":
-        raise TrapError("unreachable executed")
-    elif op == "return":
-        return ("return",)
-    elif op == "end":
-        if labels:
-            labels.pop()
-
-    elif op == "block":
-        # Find matching end
-        blocktype = instr.operand
-        arity = 0 if blocktype == () else 1 if isinstance(blocktype, tuple) else 0
-        end_ip = find_end(body, ip)
-        labels.append(Label(arity=arity, target=end_ip))
-
-    elif op == "loop":
-        # Loop label points to start of loop
-        blocktype = instr.operand
-        arity = 0  # Loop takes no values on branch (jumps to start)
-        end_ip = find_end(body, ip)
-        labels.append(Label(arity=arity, target=ip - 1, is_loop=True))
-
-    elif op == "if":
-        condition = stack.pop()
-        blocktype = instr.operand
-        arity = 0 if blocktype == () else 1 if isinstance(blocktype, tuple) else 0
-
-        # Find else and end
-        else_ip, end_ip = find_else_end(body, ip)
-
-        if condition:
-            # Execute then branch
-            labels.append(Label(arity=arity, target=end_ip))
-        else:
-            # Skip to else or end
-            labels.append(Label(arity=arity, target=end_ip))
-            if else_ip is not None:
-                # Branch past the else instruction to execute else body
-                return ("branch", else_ip + 1)
-            else:
-                # No else branch, skip to end
-                return ("branch", end_ip + 1)
-
-    elif op == "else":
-        # When we hit else during normal execution, skip to end
-        if labels:
-            label = labels[-1]
-            return ("branch", label.target)
-
-    elif op == "br":
-        depth = instr.operand
-        return do_branch(stack, labels, depth)
-
-    elif op == "br_if":
-        condition = stack.pop()
-        if condition:
+        if op == "br":
             depth = instr.operand
-            return do_branch(stack, labels, depth)
+            label_idx = len(labels) - 1 - depth
+            label = labels[label_idx]
+            for _ in range(depth + 1):
+                labels.pop()
+            if label.is_loop:
+                labels.append(label)
+            ip = label.target + 1
+            continue
 
-    elif op == "br_table":
-        label_indices, default = instr.operand
-        idx = stack.pop()
-        if 0 <= idx < len(label_indices):
-            depth = label_indices[idx]
-        else:
-            depth = default
-        return do_branch(stack, labels, depth)
+        if op == "block":
+            blocktype = instr.operand
+            arity = 0 if blocktype == () else 1 if isinstance(blocktype, tuple) else 0
+            end_ip = cf_cache.get(ip - 1, _find_end_fast(body, ip, body_len))
+            labels.append(Label(arity=arity, target=end_ip))
+            continue
 
-    elif op == "call":
-        func_idx = instr.operand
-        func = instance.funcs[func_idx]
-        func_type = instance.func_types[func.type_idx]
-        n_params = len(func_type.params)
-        args = [stack.pop() for _ in range(n_params)][::-1]
-        return ("call", func_idx, args)
+        if op == "loop":
+            blocktype = instr.operand
+            end_ip = cf_cache.get(ip - 1, _find_end_fast(body, ip, body_len))
+            labels.append(Label(arity=0, target=ip - 1, is_loop=True))
+            continue
 
-    else:
+        if op == "if":
+            condition = stack.pop()
+            blocktype = instr.operand
+            arity = 0 if blocktype == () else 1 if isinstance(blocktype, tuple) else 0
+            cached = cf_cache.get(ip - 1)
+            if cached:
+                else_ip, end_ip = cached
+            else:
+                else_ip, end_ip = _find_else_end_fast(body, ip, body_len)
+
+            if condition:
+                labels.append(Label(arity=arity, target=end_ip))
+            else:
+                labels.append(Label(arity=arity, target=end_ip))
+                if else_ip is not None:
+                    ip = else_ip + 1
+                else:
+                    ip = end_ip + 1
+            continue
+
+        if op == "else":
+            if labels:
+                label = labels[-1]
+                ip = label.target
+            continue
+
+        if op == "i32.ge_s":
+            b = stack.pop()
+            a = stack.pop()
+            stack.append(1 if a >= b else 0)
+            continue
+
+        if op == "i32.lt_s":
+            b = stack.pop()
+            a = stack.pop()
+            stack.append(1 if a < b else 0)
+            continue
+
+        if op == "i32.le_s":
+            b = stack.pop()
+            a = stack.pop()
+            stack.append(1 if a <= b else 0)
+            continue
+
+        if op == "i32.gt_s":
+            b = stack.pop()
+            a = stack.pop()
+            stack.append(1 if a > b else 0)
+            continue
+
+        if op == "i32.eq":
+            b = stack.pop()
+            a = stack.pop()
+            stack.append(1 if a == b else 0)
+            continue
+
+        if op == "i32.ne":
+            b = stack.pop()
+            a = stack.pop()
+            stack.append(1 if a != b else 0)
+            continue
+
+        if op == "i32.eqz":
+            stack.append(1 if stack.pop() == 0 else 0)
+            continue
+
+        if op == "call":
+            callee_idx = instr.operand
+            callee_func = instance.funcs[callee_idx]
+            callee_type = instance.func_types[callee_func.type_idx]
+            n_params = len(callee_type.params)
+            call_args = [stack.pop() for _ in range(n_params)][::-1]
+            call_result = execute_function(instance, callee_idx, call_args)
+            if call_result is not None:
+                if isinstance(call_result, tuple):
+                    stack.extend(call_result)
+                else:
+                    stack.append(call_result)
+            continue
+
+        if op == "return":
+            break
+
+        if op == "nop":
+            continue
+
+        if op == "unreachable":
+            raise TrapError("unreachable executed")
+
+        if op == "drop":
+            stack.pop()
+            continue
+
+        if op == "select":
+            c = stack.pop()
+            val2 = stack.pop()
+            val1 = stack.pop()
+            stack.append(val1 if c else val2)
+            continue
+
+        # Less common operations
+        if op == "i64.const":
+            v = instr.operand & _MASK_64
+            if v >= _SIGN_64:
+                v -= _OVERFLOW_64
+            stack.append(v)
+            continue
+
+        if op == "f32.const" or op == "f64.const":
+            stack.append(float(instr.operand))
+            continue
+
+        if op == "global.get":
+            stack.append(instance.globals[instr.operand].value)
+            continue
+
+        if op == "global.set":
+            g = instance.globals[instr.operand]
+            if not g.mutable:
+                raise TrapError("Cannot set immutable global")
+            g.value = stack.pop()
+            continue
+
+        if op == "i32.div_s":
+            b = stack.pop()
+            a = stack.pop()
+            if b == 0:
+                raise TrapError("integer divide by zero")
+            if a == -0x80000000 and b == -1:
+                raise TrapError("integer overflow")
+            result = abs(a) // abs(b)
+            if (a < 0) != (b < 0):
+                result = -result
+            v = result & mask_32
+            if v >= sign_32:
+                v -= overflow_32
+            stack.append(v)
+            continue
+
+        if op == "i32.div_u":
+            b = stack.pop()
+            a = stack.pop()
+            if b == 0:
+                raise TrapError("integer divide by zero")
+            stack.append((a & mask_32) // (b & mask_32))
+            continue
+
+        if op == "i32.rem_s":
+            b = stack.pop()
+            a = stack.pop()
+            if b == 0:
+                raise TrapError("integer divide by zero")
+            result = abs(a) % abs(b)
+            if a < 0:
+                result = -result
+            v = result & mask_32
+            if v >= sign_32:
+                v -= overflow_32
+            stack.append(v)
+            continue
+
+        if op == "i32.rem_u":
+            b = stack.pop()
+            a = stack.pop()
+            if b == 0:
+                raise TrapError("integer divide by zero")
+            stack.append((a & mask_32) % (b & mask_32))
+            continue
+
+        # Bitwise operations
+        if op == "i32.and":
+            b = stack.pop()
+            a = stack.pop()
+            v = (a & mask_32) & (b & mask_32)
+            if v >= sign_32:
+                v -= overflow_32
+            stack.append(v)
+            continue
+
+        if op == "i32.or":
+            b = stack.pop()
+            a = stack.pop()
+            v = (a & mask_32) | (b & mask_32)
+            if v >= sign_32:
+                v -= overflow_32
+            stack.append(v)
+            continue
+
+        if op == "i32.xor":
+            b = stack.pop()
+            a = stack.pop()
+            v = (a & mask_32) ^ (b & mask_32)
+            if v >= sign_32:
+                v -= overflow_32
+            stack.append(v)
+            continue
+
+        if op == "i32.shl":
+            b = stack.pop()
+            a = stack.pop()
+            v = ((a & mask_32) << ((b & mask_32) & 31)) & mask_32
+            if v >= sign_32:
+                v -= overflow_32
+            stack.append(v)
+            continue
+
+        if op == "i32.shr_s":
+            b = stack.pop()
+            a = stack.pop()
+            shift = (b & mask_32) & 31
+            v = (a >> shift) & mask_32
+            if v >= sign_32:
+                v -= overflow_32
+            stack.append(v)
+            continue
+
+        if op == "i32.shr_u":
+            b = stack.pop()
+            a = stack.pop()
+            shift = (b & mask_32) & 31
+            v = ((a & mask_32) >> shift) & mask_32
+            if v >= sign_32:
+                v -= overflow_32
+            stack.append(v)
+            continue
+
+        if op == "i32.rotl":
+            b = stack.pop()
+            a = stack.pop()
+            shift = (b & mask_32) & 31
+            ua = a & mask_32
+            v = ((ua << shift) | (ua >> (32 - shift))) & mask_32
+            if v >= sign_32:
+                v -= overflow_32
+            stack.append(v)
+            continue
+
+        if op == "i32.rotr":
+            b = stack.pop()
+            a = stack.pop()
+            shift = (b & mask_32) & 31
+            ua = a & mask_32
+            v = ((ua >> shift) | (ua << (32 - shift))) & mask_32
+            if v >= sign_32:
+                v -= overflow_32
+            stack.append(v)
+            continue
+
+        # Unary operations
+        if op == "i32.clz":
+            a = stack.pop() & mask_32
+            if a == 0:
+                stack.append(32)
+            else:
+                stack.append(32 - a.bit_length())
+            continue
+
+        if op == "i32.ctz":
+            a = stack.pop() & mask_32
+            if a == 0:
+                stack.append(32)
+            else:
+                count = 0
+                while (a & 1) == 0:
+                    count += 1
+                    a >>= 1
+                stack.append(count)
+            continue
+
+        if op == "i32.popcnt":
+            a = stack.pop() & mask_32
+            stack.append(bin(a).count("1"))
+            continue
+
+        # Unsigned comparisons
+        if op == "i32.lt_u":
+            b = stack.pop()
+            a = stack.pop()
+            stack.append(1 if (a & mask_32) < (b & mask_32) else 0)
+            continue
+
+        if op == "i32.gt_u":
+            b = stack.pop()
+            a = stack.pop()
+            stack.append(1 if (a & mask_32) > (b & mask_32) else 0)
+            continue
+
+        if op == "i32.le_u":
+            b = stack.pop()
+            a = stack.pop()
+            stack.append(1 if (a & mask_32) <= (b & mask_32) else 0)
+            continue
+
+        if op == "i32.ge_u":
+            b = stack.pop()
+            a = stack.pop()
+            stack.append(1 if (a & mask_32) >= (b & mask_32) else 0)
+            continue
+
+        if op == "br_table":
+            label_indices, default = instr.operand
+            idx = stack.pop()
+            if 0 <= idx < len(label_indices):
+                depth = label_indices[idx]
+            else:
+                depth = default
+            label_idx = len(labels) - 1 - depth
+            label = labels[label_idx]
+            for _ in range(depth + 1):
+                labels.pop()
+            if label.is_loop:
+                labels.append(label)
+            ip = label.target + 1
+            continue
+
         raise TrapError(f"Unimplemented instruction: {op}")
 
-    return None
+    # Return results
+    if result_count == 0:
+        return None
+    elif result_count == 1:
+        return stack[-1] if stack else None
+    else:
+        return tuple(stack[-result_count:])
 
 
+# Keep these for compatibility
 def do_branch(stack: list[Any], labels: list[Label], depth: int) -> tuple:
     """Execute a branch to the given label depth."""
-    # Count from innermost label
     label_idx = len(labels) - 1 - depth
     if label_idx < 0:
         raise TrapError(f"Invalid branch depth: {depth}")
 
     label = labels[label_idx]
 
-    # Pop labels up to and including the target
     for _ in range(depth + 1):
         labels.pop()
 
-    # For loops, we re-enter the loop (no stack adjustment needed for arity 0)
-    # For blocks, we exit with arity values on stack
     if label.is_loop:
-        # Re-add the loop label for the next iteration
         labels.append(label)
 
     return ("branch", label.target + 1 if not label.is_loop else label.target + 1)
@@ -501,37 +703,12 @@ def do_branch(stack: list[Any], labels: list[Label], depth: int) -> tuple:
 
 def find_end(body: list[Instruction], start_ip: int) -> int:
     """Find the matching 'end' instruction for a block/loop starting at start_ip."""
-    depth = 1
-    ip = start_ip
-    while ip < len(body):
-        op = body[ip].opcode
-        if op in ("block", "loop", "if"):
-            depth += 1
-        elif op == "end":
-            depth -= 1
-            if depth == 0:
-                return ip
-        ip += 1
-    raise TrapError("No matching end found")
+    return _find_end_fast(body, start_ip, len(body))
 
 
 def find_else_end(body: list[Instruction], start_ip: int) -> tuple[int | None, int]:
     """Find 'else' and 'end' for an if starting at start_ip."""
-    depth = 1
-    ip = start_ip
-    else_ip = None
-    while ip < len(body):
-        op = body[ip].opcode
-        if op in ("block", "loop", "if"):
-            depth += 1
-        elif op == "else" and depth == 1:
-            else_ip = ip
-        elif op == "end":
-            depth -= 1
-            if depth == 0:
-                return else_ip, ip
-        ip += 1
-    raise TrapError("No matching end found for if")
+    return _find_else_end_fast(body, start_ip, len(body))
 
 
 def instantiate(
@@ -557,8 +734,6 @@ def instantiate(
     # Handle imported functions
     for imp in module.imports:
         if imp.kind == "func":
-            # For now, we don't support imported functions in execution
-            # We'd need to wrap Python callables
             pass
 
     # Add module-defined functions
@@ -572,21 +747,18 @@ def instantiate(
 
     # Initialize data segments
     for data_seg in module.data:
-        if data_seg.memory_idx >= 0 and memories:  # Active segment
+        if data_seg.memory_idx >= 0 and memories:
             mem = memories[data_seg.memory_idx]
-            # Evaluate offset expression (simplified: assume i32.const)
             offset = 0
             for instr in data_seg.offset:
                 if instr.opcode == "i32.const":
                     offset = instr.operand
                     break
-            # Copy data
             mem.data[offset : offset + len(data_seg.init)] = data_seg.init
 
     # Initialize globals
     globals_list: list[GlobalInstance] = []
     for glob in module.globals:
-        # Evaluate init expression (simplified: assume const)
         value: Any = 0
         for instr in glob.init:
             if instr.opcode in ("i32.const", "i64.const"):
