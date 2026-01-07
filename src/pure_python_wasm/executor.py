@@ -347,13 +347,23 @@ def execute_function(instance: Instance, func_idx: int, args: list[Any]) -> Any:
         if op == "block":
             blocktype = instr.operand
             arity = 0 if blocktype == () else 1 if isinstance(blocktype, tuple) else 0
-            end_ip = cf_cache.get(ip - 1, _find_end_fast(body, ip, body_len))
+            # Check cache first to avoid calling _find_end_fast unnecessarily
+            cache_key = ip - 1
+            if cache_key in cf_cache:
+                end_ip = cf_cache[cache_key]
+            else:
+                end_ip = _find_end_fast(body, ip, body_len)
             labels.append(Label(arity=arity, target=end_ip))
             continue
 
         if op == "loop":
             blocktype = instr.operand
-            end_ip = cf_cache.get(ip - 1, _find_end_fast(body, ip, body_len))
+            # Check cache first to avoid calling _find_end_fast unnecessarily
+            cache_key = ip - 1
+            if cache_key in cf_cache:
+                end_ip = cf_cache[cache_key]
+            else:
+                end_ip = _find_end_fast(body, ip, body_len)
             labels.append(Label(arity=0, target=ip - 1, is_loop=True))
             continue
 
@@ -428,7 +438,12 @@ def execute_function(instance: Instance, func_idx: int, args: list[Any]) -> Any:
             callee_func = instance.funcs[callee_idx]
             callee_type = instance.func_types[callee_func.type_idx]
             n_params = len(callee_type.params)
-            call_args = [stack.pop() for _ in range(n_params)][::-1]
+            # Optimized argument collection: slice off args then truncate stack
+            if n_params > 0:
+                call_args = stack[-n_params:]
+                del stack[-n_params:]
+            else:
+                call_args = []
             call_result = execute_function(instance, callee_idx, call_args)
             if call_result is not None:
                 if isinstance(call_result, tuple):
