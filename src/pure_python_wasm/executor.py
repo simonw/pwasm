@@ -8,7 +8,7 @@ Optimized version with:
 
 from dataclasses import dataclass, field
 from typing import Any, Callable
-
+import math
 import struct
 
 from .types import (
@@ -291,6 +291,12 @@ def execute_function(instance: Instance, func_idx: int, args: list[Any]) -> Any:
     sign_32 = _SIGN_32
     overflow_32 = _OVERFLOW_32
 
+    # Cache method references for hot path
+    stack_append = stack.append
+    stack_pop = stack.pop
+    labels_append = labels.append
+    labels_pop = labels.pop
+
     while ip < body_len:
         instr = body[ip]
         op = instr.opcode
@@ -300,7 +306,7 @@ def execute_function(instance: Instance, func_idx: int, args: list[Any]) -> Any:
         # Most common operations first for branch prediction
 
         if op == "local.get":
-            stack.append(locals_list[instr.operand])
+            stack_append(locals_list[instr.operand])
             continue
 
         if op == "local.set":
@@ -310,41 +316,41 @@ def execute_function(instance: Instance, func_idx: int, args: list[Any]) -> Any:
                     f"Stack underflow in local.set at ip={ip-1}, "
                     f"func_idx={func_idx}, trying to set local {instr.operand}"
                 )
-            locals_list[instr.operand] = stack.pop()
+            locals_list[instr.operand] = stack_pop()
             continue
 
         if op == "i32.const":
             v = instr.operand & mask_32
             if v >= sign_32:
                 v -= overflow_32
-            stack.append(v)
+            stack_append(v)
             continue
 
         if op == "i32.add":
-            b = stack.pop()
-            a = stack.pop()
+            b = stack_pop()
+            a = stack_pop()
             v = (a + b) & mask_32
             if v >= sign_32:
                 v -= overflow_32
-            stack.append(v)
+            stack_append(v)
             continue
 
         if op == "i32.sub":
-            b = stack.pop()
-            a = stack.pop()
+            b = stack_pop()
+            a = stack_pop()
             v = (a - b) & mask_32
             if v >= sign_32:
                 v -= overflow_32
-            stack.append(v)
+            stack_append(v)
             continue
 
         if op == "i32.mul":
-            b = stack.pop()
-            a = stack.pop()
+            b = stack_pop()
+            a = stack_pop()
             v = (a * b) & mask_32
             if v >= sign_32:
                 v -= overflow_32
-            stack.append(v)
+            stack_append(v)
             continue
 
         if op == "local.tee":
@@ -353,11 +359,11 @@ def execute_function(instance: Instance, func_idx: int, args: list[Any]) -> Any:
 
         if op == "end":
             if labels:
-                labels.pop()
+                labels_pop()
             continue
 
         if op == "br_if":
-            condition = stack.pop()
+            condition = stack_pop()
             if condition:
                 depth = instr.operand
                 label_idx = len(labels) - 1 - depth
@@ -370,9 +376,9 @@ def execute_function(instance: Instance, func_idx: int, args: list[Any]) -> Any:
                 else:
                     del stack[label.stack_height :]
                 for _ in range(depth + 1):
-                    labels.pop()
+                    labels_pop()
                 if label.is_loop:
-                    labels.append(label)
+                    labels_append(label)
                 ip = label.target + 1
             continue
 
@@ -388,9 +394,9 @@ def execute_function(instance: Instance, func_idx: int, args: list[Any]) -> Any:
             else:
                 del stack[label.stack_height :]
             for _ in range(depth + 1):
-                labels.pop()
+                labels_pop()
             if label.is_loop:
-                labels.append(label)
+                labels_append(label)
             ip = label.target + 1
             continue
 
@@ -403,7 +409,7 @@ def execute_function(instance: Instance, func_idx: int, args: list[Any]) -> Any:
                 end_ip = cf_cache[cache_key]
             else:
                 end_ip = _find_end_fast(body, ip, body_len)
-            labels.append(Label(arity=arity, target=end_ip, stack_height=len(stack)))
+            labels_append(Label(arity=arity, target=end_ip, stack_height=len(stack)))
             continue
 
         if op == "loop":
@@ -414,13 +420,13 @@ def execute_function(instance: Instance, func_idx: int, args: list[Any]) -> Any:
                 end_ip = cf_cache[cache_key]
             else:
                 end_ip = _find_end_fast(body, ip, body_len)
-            labels.append(
+            labels_append(
                 Label(arity=0, target=ip - 1, is_loop=True, stack_height=len(stack))
             )
             continue
 
         if op == "if":
-            condition = stack.pop()
+            condition = stack_pop()
             blocktype = instr.operand
             arity = 0 if blocktype == () else 1 if isinstance(blocktype, tuple) else 0
             cached = cf_cache.get(ip - 1)
@@ -430,13 +436,13 @@ def execute_function(instance: Instance, func_idx: int, args: list[Any]) -> Any:
                 else_ip, end_ip = _find_else_end_fast(body, ip, body_len)
 
             if condition:
-                labels.append(
+                labels_append(
                     Label(arity=arity, target=end_ip, stack_height=len(stack))
                 )
             else:
                 if else_ip is not None:
                     # Has else branch - enter else block
-                    labels.append(
+                    labels_append(
                         Label(arity=arity, target=end_ip, stack_height=len(stack))
                     )
                     ip = else_ip + 1
@@ -452,43 +458,43 @@ def execute_function(instance: Instance, func_idx: int, args: list[Any]) -> Any:
             continue
 
         if op == "i32.ge_s":
-            b = stack.pop()
-            a = stack.pop()
-            stack.append(1 if a >= b else 0)
+            b = stack_pop()
+            a = stack_pop()
+            stack_append(1 if a >= b else 0)
             continue
 
         if op == "i32.lt_s":
-            b = stack.pop()
-            a = stack.pop()
-            stack.append(1 if a < b else 0)
+            b = stack_pop()
+            a = stack_pop()
+            stack_append(1 if a < b else 0)
             continue
 
         if op == "i32.le_s":
-            b = stack.pop()
-            a = stack.pop()
-            stack.append(1 if a <= b else 0)
+            b = stack_pop()
+            a = stack_pop()
+            stack_append(1 if a <= b else 0)
             continue
 
         if op == "i32.gt_s":
-            b = stack.pop()
-            a = stack.pop()
-            stack.append(1 if a > b else 0)
+            b = stack_pop()
+            a = stack_pop()
+            stack_append(1 if a > b else 0)
             continue
 
         if op == "i32.eq":
-            b = stack.pop()
-            a = stack.pop()
-            stack.append(1 if a == b else 0)
+            b = stack_pop()
+            a = stack_pop()
+            stack_append(1 if a == b else 0)
             continue
 
         if op == "i32.ne":
-            b = stack.pop()
-            a = stack.pop()
-            stack.append(1 if a != b else 0)
+            b = stack_pop()
+            a = stack_pop()
+            stack_append(1 if a != b else 0)
             continue
 
         if op == "i32.eqz":
-            stack.append(1 if stack.pop() == 0 else 0)
+            stack_append(1 if stack_pop() == 0 else 0)
             continue
 
         if op == "call":
@@ -507,7 +513,7 @@ def execute_function(instance: Instance, func_idx: int, args: list[Any]) -> Any:
                 if isinstance(call_result, tuple):
                     stack.extend(call_result)
                 else:
-                    stack.append(call_result)
+                    stack_append(call_result)
             continue
 
         if op == "return":
@@ -520,14 +526,14 @@ def execute_function(instance: Instance, func_idx: int, args: list[Any]) -> Any:
             raise TrapError("unreachable executed")
 
         if op == "drop":
-            stack.pop()
+            stack_pop()
             continue
 
         if op == "select":
-            c = stack.pop()
-            val2 = stack.pop()
-            val1 = stack.pop()
-            stack.append(val1 if c else val2)
+            c = stack_pop()
+            val2 = stack_pop()
+            val1 = stack_pop()
+            stack_append(val1 if c else val2)
             continue
 
         # Less common operations
@@ -1249,32 +1255,22 @@ def execute_function(instance: Instance, func_idx: int, args: list[Any]) -> Any:
             continue
 
         if op == "f64.sqrt":
-            import math
-
             stack.append(math.sqrt(float(stack.pop())))
             continue
 
         if op == "f64.ceil":
-            import math
-
             stack.append(float(math.ceil(stack.pop())))
             continue
 
         if op == "f64.floor":
-            import math
-
             stack.append(float(math.floor(stack.pop())))
             continue
 
         if op == "f64.trunc":
-            import math
-
             stack.append(float(math.trunc(stack.pop())))
             continue
 
         if op == "f64.nearest":
-            import math
-
             v = stack.pop()
             # Round to nearest even
             rounded = round(v)
@@ -1285,16 +1281,12 @@ def execute_function(instance: Instance, func_idx: int, args: list[Any]) -> Any:
             continue
 
         if op == "f64.copysign":
-            import math
-
             b = stack.pop()
             a = stack.pop()
             stack.append(math.copysign(a, b))
             continue
 
         if op == "f64.min":
-            import math
-
             b = stack.pop()
             a = stack.pop()
             if math.isnan(a) or math.isnan(b):
@@ -1304,8 +1296,6 @@ def execute_function(instance: Instance, func_idx: int, args: list[Any]) -> Any:
             continue
 
         if op == "f64.max":
-            import math
-
             b = stack.pop()
             a = stack.pop()
             if math.isnan(a) or math.isnan(b):
@@ -1437,8 +1427,6 @@ def execute_function(instance: Instance, func_idx: int, args: list[Any]) -> Any:
             continue
 
         if op == "i32.trunc_f64_s":
-            import math
-
             v = stack.pop()
             if math.isnan(v) or math.isinf(v):
                 raise TrapError("invalid conversion to integer")
@@ -1449,8 +1437,6 @@ def execute_function(instance: Instance, func_idx: int, args: list[Any]) -> Any:
             continue
 
         if op == "i32.trunc_f64_u":
-            import math
-
             v = stack.pop()
             if math.isnan(v) or math.isinf(v):
                 raise TrapError("invalid conversion to integer")
@@ -1461,8 +1447,6 @@ def execute_function(instance: Instance, func_idx: int, args: list[Any]) -> Any:
             continue
 
         if op == "i32.trunc_f32_s":
-            import math
-
             v = stack.pop()
             if math.isnan(v) or math.isinf(v):
                 raise TrapError("invalid conversion to integer")
@@ -1473,8 +1457,6 @@ def execute_function(instance: Instance, func_idx: int, args: list[Any]) -> Any:
             continue
 
         if op == "i32.trunc_f32_u":
-            import math
-
             v = stack.pop()
             if math.isnan(v) or math.isinf(v):
                 raise TrapError("invalid conversion to integer")
@@ -1485,8 +1467,6 @@ def execute_function(instance: Instance, func_idx: int, args: list[Any]) -> Any:
             continue
 
         if op == "i64.trunc_f64_s":
-            import math
-
             v = stack.pop()
             if math.isnan(v) or math.isinf(v):
                 raise TrapError("invalid conversion to integer")
@@ -1497,8 +1477,6 @@ def execute_function(instance: Instance, func_idx: int, args: list[Any]) -> Any:
             continue
 
         if op == "i64.trunc_f64_u":
-            import math
-
             v = stack.pop()
             if math.isnan(v) or math.isinf(v):
                 raise TrapError("invalid conversion to integer")
