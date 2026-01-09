@@ -8,8 +8,19 @@ Optimized version with:
 
 from dataclasses import dataclass, field
 from typing import Any, Callable
+import math
+import struct
 
-from .types import Module, Function, FuncType, Instruction, Export, Memory, Global
+from .types import (
+    Module,
+    Function,
+    FuncType,
+    Instruction,
+    Export,
+    Memory,
+    Global,
+    Table,
+)
 from .errors import TrapError
 
 
@@ -52,9 +63,10 @@ def to_u64(value: int) -> int:
 class Label:
     """A control flow label for block/loop/if."""
 
-    arity: int  # Number of values on stack when branching
+    arity: int  # Number of result values (for block) or input values (for loop)
     target: int  # Instruction index to jump to
     is_loop: bool = False  # True if this is a loop label
+    stack_height: int = 0  # Stack height when entering this block
 
 
 @dataclass(slots=True)
@@ -101,6 +113,15 @@ class GlobalInstance:
     mutable: bool
 
 
+@dataclass(slots=True)
+class TableInstance:
+    """Runtime table instance."""
+
+    elements: list[Any]  # List of function references (indices or None)
+    min_size: int
+    max_size: int | None
+
+
 class ExportNamespace:
     """Namespace for accessing exported functions."""
 
@@ -137,6 +158,7 @@ class Instance:
     func_types: list[FuncType]
     memories: list[MemoryInstance]
     globals: list[GlobalInstance]
+    tables: list[TableInstance] = field(default_factory=list)
     exports: ExportNamespace = field(init=False)
     # Pre-computed control flow targets
     _control_flow_cache: dict = field(init=False, default_factory=dict)
@@ -159,6 +181,9 @@ class Instance:
                 self.exports._add(export.name, self.memories[export.index])
             elif export.kind == "global":
                 self.exports._add(export.name, self.globals[export.index])
+            elif export.kind == "table":
+                if self.tables:
+                    self.exports._add(export.name, self.tables[export.index])
 
     def _make_func_wrapper(self, func_idx: int) -> Callable:
         """Create a Python callable that invokes a WASM function."""
@@ -229,6 +254,11 @@ def execute_function(instance: Instance, func_idx: int, args: list[Any]) -> Any:
     func = instance.funcs[func_idx]
     func_type = instance.func_types[func.type_idx]
 
+    # Check if this is an imported function
+    if hasattr(instance, "_imported_funcs") and func_idx in instance._imported_funcs:
+        callable_func = instance._imported_funcs[func_idx]
+        return callable_func(*args)
+
     # Set up locals: params + declared locals
     locals_list: list[Any] = list(args)
 
@@ -252,7 +282,7 @@ def execute_function(instance: Instance, func_idx: int, args: list[Any]) -> Any:
     result_count = len(func_type.results)
 
     # Add implicit function-level label
-    labels.append(Label(arity=result_count, target=body_len - 1))
+    labels.append(Label(arity=result_count, target=body_len - 1, stack_height=0))
 
     ip = 0  # Instruction pointer
 
@@ -260,6 +290,12 @@ def execute_function(instance: Instance, func_idx: int, args: list[Any]) -> Any:
     mask_32 = _MASK_32
     sign_32 = _SIGN_32
     overflow_32 = _OVERFLOW_32
+
+    # Cache method references for hot path
+    stack_append = stack.append
+    stack_pop = stack.pop
+    labels_append = labels.append
+    labels_pop = labels.pop
 
     while ip < body_len:
         instr = body[ip]
@@ -270,45 +306,51 @@ def execute_function(instance: Instance, func_idx: int, args: list[Any]) -> Any:
         # Most common operations first for branch prediction
 
         if op == "local.get":
-            stack.append(locals_list[instr.operand])
+            stack_append(locals_list[instr.operand])
             continue
 
         if op == "local.set":
-            locals_list[instr.operand] = stack.pop()
+            if not stack:
+                # Debug: show context
+                raise TrapError(
+                    f"Stack underflow in local.set at ip={ip-1}, "
+                    f"func_idx={func_idx}, trying to set local {instr.operand}"
+                )
+            locals_list[instr.operand] = stack_pop()
             continue
 
         if op == "i32.const":
             v = instr.operand & mask_32
             if v >= sign_32:
                 v -= overflow_32
-            stack.append(v)
+            stack_append(v)
             continue
 
         if op == "i32.add":
-            b = stack.pop()
-            a = stack.pop()
+            b = stack_pop()
+            a = stack_pop()
             v = (a + b) & mask_32
             if v >= sign_32:
                 v -= overflow_32
-            stack.append(v)
+            stack_append(v)
             continue
 
         if op == "i32.sub":
-            b = stack.pop()
-            a = stack.pop()
+            b = stack_pop()
+            a = stack_pop()
             v = (a - b) & mask_32
             if v >= sign_32:
                 v -= overflow_32
-            stack.append(v)
+            stack_append(v)
             continue
 
         if op == "i32.mul":
-            b = stack.pop()
-            a = stack.pop()
+            b = stack_pop()
+            a = stack_pop()
             v = (a * b) & mask_32
             if v >= sign_32:
                 v -= overflow_32
-            stack.append(v)
+            stack_append(v)
             continue
 
         if op == "local.tee":
@@ -317,19 +359,26 @@ def execute_function(instance: Instance, func_idx: int, args: list[Any]) -> Any:
 
         if op == "end":
             if labels:
-                labels.pop()
+                labels_pop()
             continue
 
         if op == "br_if":
-            condition = stack.pop()
+            condition = stack_pop()
             if condition:
                 depth = instr.operand
                 label_idx = len(labels) - 1 - depth
                 label = labels[label_idx]
+                # Preserve arity values, reset stack to entry height + arity
+                if label.arity > 0:
+                    preserved = stack[-label.arity :]
+                    del stack[label.stack_height :]
+                    stack.extend(preserved)
+                else:
+                    del stack[label.stack_height :]
                 for _ in range(depth + 1):
-                    labels.pop()
+                    labels_pop()
                 if label.is_loop:
-                    labels.append(label)
+                    labels_append(label)
                 ip = label.target + 1
             continue
 
@@ -337,10 +386,17 @@ def execute_function(instance: Instance, func_idx: int, args: list[Any]) -> Any:
             depth = instr.operand
             label_idx = len(labels) - 1 - depth
             label = labels[label_idx]
+            # Preserve arity values, reset stack to entry height + arity
+            if label.arity > 0:
+                preserved = stack[-label.arity :]
+                del stack[label.stack_height :]
+                stack.extend(preserved)
+            else:
+                del stack[label.stack_height :]
             for _ in range(depth + 1):
-                labels.pop()
+                labels_pop()
             if label.is_loop:
-                labels.append(label)
+                labels_append(label)
             ip = label.target + 1
             continue
 
@@ -353,7 +409,7 @@ def execute_function(instance: Instance, func_idx: int, args: list[Any]) -> Any:
                 end_ip = cf_cache[cache_key]
             else:
                 end_ip = _find_end_fast(body, ip, body_len)
-            labels.append(Label(arity=arity, target=end_ip))
+            labels_append(Label(arity=arity, target=end_ip, stack_height=len(stack)))
             continue
 
         if op == "loop":
@@ -364,11 +420,13 @@ def execute_function(instance: Instance, func_idx: int, args: list[Any]) -> Any:
                 end_ip = cf_cache[cache_key]
             else:
                 end_ip = _find_end_fast(body, ip, body_len)
-            labels.append(Label(arity=0, target=ip - 1, is_loop=True))
+            labels_append(
+                Label(arity=0, target=ip - 1, is_loop=True, stack_height=len(stack))
+            )
             continue
 
         if op == "if":
-            condition = stack.pop()
+            condition = stack_pop()
             blocktype = instr.operand
             arity = 0 if blocktype == () else 1 if isinstance(blocktype, tuple) else 0
             cached = cf_cache.get(ip - 1)
@@ -378,12 +436,18 @@ def execute_function(instance: Instance, func_idx: int, args: list[Any]) -> Any:
                 else_ip, end_ip = _find_else_end_fast(body, ip, body_len)
 
             if condition:
-                labels.append(Label(arity=arity, target=end_ip))
+                labels_append(
+                    Label(arity=arity, target=end_ip, stack_height=len(stack))
+                )
             else:
-                labels.append(Label(arity=arity, target=end_ip))
                 if else_ip is not None:
+                    # Has else branch - enter else block
+                    labels_append(
+                        Label(arity=arity, target=end_ip, stack_height=len(stack))
+                    )
                     ip = else_ip + 1
                 else:
+                    # No else - skip past the if entirely (don't push label)
                     ip = end_ip + 1
             continue
 
@@ -394,43 +458,43 @@ def execute_function(instance: Instance, func_idx: int, args: list[Any]) -> Any:
             continue
 
         if op == "i32.ge_s":
-            b = stack.pop()
-            a = stack.pop()
-            stack.append(1 if a >= b else 0)
+            b = stack_pop()
+            a = stack_pop()
+            stack_append(1 if a >= b else 0)
             continue
 
         if op == "i32.lt_s":
-            b = stack.pop()
-            a = stack.pop()
-            stack.append(1 if a < b else 0)
+            b = stack_pop()
+            a = stack_pop()
+            stack_append(1 if a < b else 0)
             continue
 
         if op == "i32.le_s":
-            b = stack.pop()
-            a = stack.pop()
-            stack.append(1 if a <= b else 0)
+            b = stack_pop()
+            a = stack_pop()
+            stack_append(1 if a <= b else 0)
             continue
 
         if op == "i32.gt_s":
-            b = stack.pop()
-            a = stack.pop()
-            stack.append(1 if a > b else 0)
+            b = stack_pop()
+            a = stack_pop()
+            stack_append(1 if a > b else 0)
             continue
 
         if op == "i32.eq":
-            b = stack.pop()
-            a = stack.pop()
-            stack.append(1 if a == b else 0)
+            b = stack_pop()
+            a = stack_pop()
+            stack_append(1 if a == b else 0)
             continue
 
         if op == "i32.ne":
-            b = stack.pop()
-            a = stack.pop()
-            stack.append(1 if a != b else 0)
+            b = stack_pop()
+            a = stack_pop()
+            stack_append(1 if a != b else 0)
             continue
 
         if op == "i32.eqz":
-            stack.append(1 if stack.pop() == 0 else 0)
+            stack_append(1 if stack_pop() == 0 else 0)
             continue
 
         if op == "call":
@@ -449,7 +513,7 @@ def execute_function(instance: Instance, func_idx: int, args: list[Any]) -> Any:
                 if isinstance(call_result, tuple):
                     stack.extend(call_result)
                 else:
-                    stack.append(call_result)
+                    stack_append(call_result)
             continue
 
         if op == "return":
@@ -462,14 +526,14 @@ def execute_function(instance: Instance, func_idx: int, args: list[Any]) -> Any:
             raise TrapError("unreachable executed")
 
         if op == "drop":
-            stack.pop()
+            stack_pop()
             continue
 
         if op == "select":
-            c = stack.pop()
-            val2 = stack.pop()
-            val1 = stack.pop()
-            stack.append(val1 if c else val2)
+            c = stack_pop()
+            val2 = stack_pop()
+            val1 = stack_pop()
+            stack_append(val1 if c else val2)
             continue
 
         # Less common operations
@@ -680,11 +744,799 @@ def execute_function(instance: Instance, func_idx: int, args: list[Any]) -> Any:
                 depth = default
             label_idx = len(labels) - 1 - depth
             label = labels[label_idx]
+            # Preserve arity values, reset stack to entry height + arity
+            if label.arity > 0:
+                preserved = stack[-label.arity :]
+                del stack[label.stack_height :]
+                stack.extend(preserved)
+            else:
+                del stack[label.stack_height :]
             for _ in range(depth + 1):
                 labels.pop()
             if label.is_loop:
                 labels.append(label)
             ip = label.target + 1
+            continue
+
+        # ========== MEMORY OPERATIONS ==========
+        if op == "i32.load":
+            align, offset = instr.operand
+            addr = stack.pop()
+            ea = addr + offset
+            mem = instance.memories[0].data
+            if ea + 4 > len(mem):
+                raise TrapError("out of bounds memory access")
+            v = int.from_bytes(mem[ea : ea + 4], "little", signed=True)
+            stack.append(v)
+            continue
+
+        if op == "i32.store":
+            align, offset = instr.operand
+            value = stack.pop()
+            addr = stack.pop()
+            ea = addr + offset
+            mem = instance.memories[0].data
+            if ea + 4 > len(mem):
+                raise TrapError("out of bounds memory access")
+            mem[ea : ea + 4] = (value & mask_32).to_bytes(4, "little")
+            continue
+
+        if op == "i32.load8_s":
+            align, offset = instr.operand
+            addr = stack.pop()
+            ea = addr + offset
+            mem = instance.memories[0].data
+            if ea + 1 > len(mem):
+                raise TrapError("out of bounds memory access")
+            v = int.from_bytes(mem[ea : ea + 1], "little", signed=True)
+            stack.append(v)
+            continue
+
+        if op == "i32.load8_u":
+            align, offset = instr.operand
+            addr = stack.pop()
+            ea = addr + offset
+            mem = instance.memories[0].data
+            if ea + 1 > len(mem):
+                raise TrapError("out of bounds memory access")
+            v = mem[ea]
+            stack.append(v)
+            continue
+
+        if op == "i32.load16_s":
+            align, offset = instr.operand
+            addr = stack.pop()
+            ea = addr + offset
+            mem = instance.memories[0].data
+            if ea + 2 > len(mem):
+                raise TrapError("out of bounds memory access")
+            v = int.from_bytes(mem[ea : ea + 2], "little", signed=True)
+            stack.append(v)
+            continue
+
+        if op == "i32.load16_u":
+            align, offset = instr.operand
+            addr = stack.pop()
+            ea = addr + offset
+            mem = instance.memories[0].data
+            if ea + 2 > len(mem):
+                raise TrapError("out of bounds memory access")
+            v = int.from_bytes(mem[ea : ea + 2], "little", signed=False)
+            stack.append(v)
+            continue
+
+        if op == "i32.store8":
+            align, offset = instr.operand
+            value = stack.pop()
+            addr = stack.pop()
+            ea = addr + offset
+            mem = instance.memories[0].data
+            if ea + 1 > len(mem):
+                raise TrapError("out of bounds memory access")
+            mem[ea] = value & 0xFF
+            continue
+
+        if op == "i32.store16":
+            align, offset = instr.operand
+            value = stack.pop()
+            addr = stack.pop()
+            ea = addr + offset
+            mem = instance.memories[0].data
+            if ea + 2 > len(mem):
+                raise TrapError("out of bounds memory access")
+            mem[ea : ea + 2] = (value & 0xFFFF).to_bytes(2, "little")
+            continue
+
+        if op == "i64.load":
+            align, offset = instr.operand
+            addr = stack.pop()
+            ea = addr + offset
+            mem = instance.memories[0].data
+            if ea + 8 > len(mem):
+                raise TrapError("out of bounds memory access")
+            v = int.from_bytes(mem[ea : ea + 8], "little", signed=True)
+            stack.append(v)
+            continue
+
+        if op == "i64.store":
+            align, offset = instr.operand
+            value = stack.pop()
+            addr = stack.pop()
+            ea = addr + offset
+            mem = instance.memories[0].data
+            if ea + 8 > len(mem):
+                raise TrapError("out of bounds memory access")
+            mem[ea : ea + 8] = (value & _MASK_64).to_bytes(8, "little")
+            continue
+
+        if op == "i64.load8_s":
+            align, offset = instr.operand
+            addr = stack.pop()
+            ea = addr + offset
+            mem = instance.memories[0].data
+            if ea + 1 > len(mem):
+                raise TrapError("out of bounds memory access")
+            v = int.from_bytes(mem[ea : ea + 1], "little", signed=True)
+            stack.append(v)
+            continue
+
+        if op == "i64.load8_u":
+            align, offset = instr.operand
+            addr = stack.pop()
+            ea = addr + offset
+            mem = instance.memories[0].data
+            if ea + 1 > len(mem):
+                raise TrapError("out of bounds memory access")
+            v = mem[ea]
+            stack.append(v)
+            continue
+
+        if op == "i64.load16_s":
+            align, offset = instr.operand
+            addr = stack.pop()
+            ea = addr + offset
+            mem = instance.memories[0].data
+            if ea + 2 > len(mem):
+                raise TrapError("out of bounds memory access")
+            v = int.from_bytes(mem[ea : ea + 2], "little", signed=True)
+            stack.append(v)
+            continue
+
+        if op == "i64.load16_u":
+            align, offset = instr.operand
+            addr = stack.pop()
+            ea = addr + offset
+            mem = instance.memories[0].data
+            if ea + 2 > len(mem):
+                raise TrapError("out of bounds memory access")
+            v = int.from_bytes(mem[ea : ea + 2], "little", signed=False)
+            stack.append(v)
+            continue
+
+        if op == "i64.load32_s":
+            align, offset = instr.operand
+            addr = stack.pop()
+            ea = addr + offset
+            mem = instance.memories[0].data
+            if ea + 4 > len(mem):
+                raise TrapError("out of bounds memory access")
+            v = int.from_bytes(mem[ea : ea + 4], "little", signed=True)
+            stack.append(v)
+            continue
+
+        if op == "i64.load32_u":
+            align, offset = instr.operand
+            addr = stack.pop()
+            ea = addr + offset
+            mem = instance.memories[0].data
+            if ea + 4 > len(mem):
+                raise TrapError("out of bounds memory access")
+            v = int.from_bytes(mem[ea : ea + 4], "little", signed=False)
+            stack.append(v)
+            continue
+
+        if op == "i64.store8":
+            align, offset = instr.operand
+            value = stack.pop()
+            addr = stack.pop()
+            ea = addr + offset
+            mem = instance.memories[0].data
+            if ea + 1 > len(mem):
+                raise TrapError("out of bounds memory access")
+            mem[ea] = value & 0xFF
+            continue
+
+        if op == "i64.store32":
+            align, offset = instr.operand
+            value = stack.pop()
+            addr = stack.pop()
+            ea = addr + offset
+            mem = instance.memories[0].data
+            if ea + 4 > len(mem):
+                raise TrapError("out of bounds memory access")
+            mem[ea : ea + 4] = (value & mask_32).to_bytes(4, "little")
+            continue
+
+        if op == "f64.load":
+            align, offset = instr.operand
+            addr = stack.pop()
+            ea = addr + offset
+            mem = instance.memories[0].data
+            if ea + 8 > len(mem):
+                raise TrapError("out of bounds memory access")
+            v = struct.unpack("<d", mem[ea : ea + 8])[0]
+            stack.append(v)
+            continue
+
+        if op == "f64.store":
+            align, offset = instr.operand
+            value = stack.pop()
+            addr = stack.pop()
+            ea = addr + offset
+            mem = instance.memories[0].data
+            if ea + 8 > len(mem):
+                raise TrapError("out of bounds memory access")
+            mem[ea : ea + 8] = struct.pack("<d", value)
+            continue
+
+        if op == "f32.load":
+            align, offset = instr.operand
+            addr = stack.pop()
+            ea = addr + offset
+            mem = instance.memories[0].data
+            if ea + 4 > len(mem):
+                raise TrapError("out of bounds memory access")
+            v = struct.unpack("<f", mem[ea : ea + 4])[0]
+            stack.append(v)
+            continue
+
+        if op == "f32.store":
+            align, offset = instr.operand
+            value = stack.pop()
+            addr = stack.pop()
+            ea = addr + offset
+            mem = instance.memories[0].data
+            if ea + 4 > len(mem):
+                raise TrapError("out of bounds memory access")
+            mem[ea : ea + 4] = struct.pack("<f", value)
+            continue
+
+        if op == "memory.size":
+            mem = instance.memories[0]
+            stack.append(len(mem.data) // MemoryInstance.PAGE_SIZE)
+            continue
+
+        if op == "memory.grow":
+            delta = stack.pop()
+            mem = instance.memories[0]
+            result = mem.grow(delta)
+            stack.append(result)
+            continue
+
+        # ========== I64 OPERATIONS ==========
+        if op == "i64.add":
+            b = stack.pop()
+            a = stack.pop()
+            stack.append(to_i64(a + b))
+            continue
+
+        if op == "i64.sub":
+            b = stack.pop()
+            a = stack.pop()
+            stack.append(to_i64(a - b))
+            continue
+
+        if op == "i64.mul":
+            b = stack.pop()
+            a = stack.pop()
+            stack.append(to_i64(a * b))
+            continue
+
+        if op == "i64.div_s":
+            b = stack.pop()
+            a = stack.pop()
+            if b == 0:
+                raise TrapError("integer divide by zero")
+            if a == -0x8000000000000000 and b == -1:
+                raise TrapError("integer overflow")
+            result = abs(a) // abs(b)
+            if (a < 0) != (b < 0):
+                result = -result
+            stack.append(to_i64(result))
+            continue
+
+        if op == "i64.div_u":
+            b = stack.pop()
+            a = stack.pop()
+            if b == 0:
+                raise TrapError("integer divide by zero")
+            stack.append((a & _MASK_64) // (b & _MASK_64))
+            continue
+
+        if op == "i64.rem_s":
+            b = stack.pop()
+            a = stack.pop()
+            if b == 0:
+                raise TrapError("integer divide by zero")
+            result = abs(a) % abs(b)
+            if a < 0:
+                result = -result
+            stack.append(to_i64(result))
+            continue
+
+        if op == "i64.rem_u":
+            b = stack.pop()
+            a = stack.pop()
+            if b == 0:
+                raise TrapError("integer divide by zero")
+            stack.append((a & _MASK_64) % (b & _MASK_64))
+            continue
+
+        if op == "i64.and":
+            b = stack.pop()
+            a = stack.pop()
+            stack.append(to_i64((a & _MASK_64) & (b & _MASK_64)))
+            continue
+
+        if op == "i64.or":
+            b = stack.pop()
+            a = stack.pop()
+            stack.append(to_i64((a & _MASK_64) | (b & _MASK_64)))
+            continue
+
+        if op == "i64.xor":
+            b = stack.pop()
+            a = stack.pop()
+            stack.append(to_i64((a & _MASK_64) ^ (b & _MASK_64)))
+            continue
+
+        if op == "i64.shl":
+            b = stack.pop()
+            a = stack.pop()
+            shift = (b & _MASK_64) & 63
+            stack.append(to_i64((a & _MASK_64) << shift))
+            continue
+
+        if op == "i64.shr_s":
+            b = stack.pop()
+            a = stack.pop()
+            shift = (b & _MASK_64) & 63
+            stack.append(to_i64(a >> shift))
+            continue
+
+        if op == "i64.shr_u":
+            b = stack.pop()
+            a = stack.pop()
+            shift = (b & _MASK_64) & 63
+            stack.append((a & _MASK_64) >> shift)
+            continue
+
+        if op == "i64.rotl":
+            b = stack.pop()
+            a = stack.pop()
+            shift = (b & _MASK_64) & 63
+            ua = a & _MASK_64
+            v = ((ua << shift) | (ua >> (64 - shift))) & _MASK_64
+            stack.append(to_i64(v))
+            continue
+
+        if op == "i64.rotr":
+            b = stack.pop()
+            a = stack.pop()
+            shift = (b & _MASK_64) & 63
+            ua = a & _MASK_64
+            v = ((ua >> shift) | (ua << (64 - shift))) & _MASK_64
+            stack.append(to_i64(v))
+            continue
+
+        if op == "i64.clz":
+            a = stack.pop() & _MASK_64
+            if a == 0:
+                stack.append(64)
+            else:
+                stack.append(64 - a.bit_length())
+            continue
+
+        if op == "i64.ctz":
+            a = stack.pop() & _MASK_64
+            if a == 0:
+                stack.append(64)
+            else:
+                count = 0
+                while (a & 1) == 0:
+                    count += 1
+                    a >>= 1
+                stack.append(count)
+            continue
+
+        if op == "i64.popcnt":
+            a = stack.pop() & _MASK_64
+            stack.append(bin(a).count("1"))
+            continue
+
+        if op == "i64.eq":
+            b = stack.pop()
+            a = stack.pop()
+            stack.append(1 if (a & _MASK_64) == (b & _MASK_64) else 0)
+            continue
+
+        if op == "i64.ne":
+            b = stack.pop()
+            a = stack.pop()
+            stack.append(1 if (a & _MASK_64) != (b & _MASK_64) else 0)
+            continue
+
+        if op == "i64.eqz":
+            stack.append(1 if (stack.pop() & _MASK_64) == 0 else 0)
+            continue
+
+        if op == "i64.lt_s":
+            b = stack.pop()
+            a = stack.pop()
+            stack.append(1 if to_i64(a) < to_i64(b) else 0)
+            continue
+
+        if op == "i64.lt_u":
+            b = stack.pop()
+            a = stack.pop()
+            stack.append(1 if (a & _MASK_64) < (b & _MASK_64) else 0)
+            continue
+
+        if op == "i64.gt_s":
+            b = stack.pop()
+            a = stack.pop()
+            stack.append(1 if to_i64(a) > to_i64(b) else 0)
+            continue
+
+        if op == "i64.gt_u":
+            b = stack.pop()
+            a = stack.pop()
+            stack.append(1 if (a & _MASK_64) > (b & _MASK_64) else 0)
+            continue
+
+        if op == "i64.le_s":
+            b = stack.pop()
+            a = stack.pop()
+            stack.append(1 if to_i64(a) <= to_i64(b) else 0)
+            continue
+
+        if op == "i64.le_u":
+            b = stack.pop()
+            a = stack.pop()
+            stack.append(1 if (a & _MASK_64) <= (b & _MASK_64) else 0)
+            continue
+
+        if op == "i64.ge_s":
+            b = stack.pop()
+            a = stack.pop()
+            stack.append(1 if to_i64(a) >= to_i64(b) else 0)
+            continue
+
+        if op == "i64.ge_u":
+            b = stack.pop()
+            a = stack.pop()
+            stack.append(1 if (a & _MASK_64) >= (b & _MASK_64) else 0)
+            continue
+
+        # ========== F64 OPERATIONS ==========
+        if op == "f64.add":
+            b = stack.pop()
+            a = stack.pop()
+            stack.append(float(a) + float(b))
+            continue
+
+        if op == "f64.sub":
+            b = stack.pop()
+            a = stack.pop()
+            stack.append(float(a) - float(b))
+            continue
+
+        if op == "f64.mul":
+            b = stack.pop()
+            a = stack.pop()
+            stack.append(float(a) * float(b))
+            continue
+
+        if op == "f64.div":
+            b = stack.pop()
+            a = stack.pop()
+            if b == 0:
+                stack.append(float("inf") if a >= 0 else float("-inf"))
+            else:
+                stack.append(float(a) / float(b))
+            continue
+
+        if op == "f64.abs":
+            stack.append(abs(float(stack.pop())))
+            continue
+
+        if op == "f64.neg":
+            stack.append(-float(stack.pop()))
+            continue
+
+        if op == "f64.sqrt":
+            stack.append(math.sqrt(float(stack.pop())))
+            continue
+
+        if op == "f64.ceil":
+            stack.append(float(math.ceil(stack.pop())))
+            continue
+
+        if op == "f64.floor":
+            stack.append(float(math.floor(stack.pop())))
+            continue
+
+        if op == "f64.trunc":
+            stack.append(float(math.trunc(stack.pop())))
+            continue
+
+        if op == "f64.nearest":
+            v = stack.pop()
+            # Round to nearest even
+            rounded = round(v)
+            # Check for tie-breaking
+            if abs(v - rounded) == 0.5:
+                rounded = 2.0 * round(v / 2.0)
+            stack.append(float(rounded))
+            continue
+
+        if op == "f64.copysign":
+            b = stack.pop()
+            a = stack.pop()
+            stack.append(math.copysign(a, b))
+            continue
+
+        if op == "f64.min":
+            b = stack.pop()
+            a = stack.pop()
+            if math.isnan(a) or math.isnan(b):
+                stack.append(float("nan"))
+            else:
+                stack.append(min(a, b))
+            continue
+
+        if op == "f64.max":
+            b = stack.pop()
+            a = stack.pop()
+            if math.isnan(a) or math.isnan(b):
+                stack.append(float("nan"))
+            else:
+                stack.append(max(a, b))
+            continue
+
+        if op == "f64.eq":
+            b = stack.pop()
+            a = stack.pop()
+            stack.append(1 if float(a) == float(b) else 0)
+            continue
+
+        if op == "f64.ne":
+            b = stack.pop()
+            a = stack.pop()
+            stack.append(1 if float(a) != float(b) else 0)
+            continue
+
+        if op == "f64.lt":
+            b = stack.pop()
+            a = stack.pop()
+            stack.append(1 if float(a) < float(b) else 0)
+            continue
+
+        if op == "f64.gt":
+            b = stack.pop()
+            a = stack.pop()
+            stack.append(1 if float(a) > float(b) else 0)
+            continue
+
+        if op == "f64.le":
+            b = stack.pop()
+            a = stack.pop()
+            stack.append(1 if float(a) <= float(b) else 0)
+            continue
+
+        if op == "f64.ge":
+            b = stack.pop()
+            a = stack.pop()
+            stack.append(1 if float(a) >= float(b) else 0)
+            continue
+
+        # ========== F32 OPERATIONS ==========
+        if op == "f32.add":
+            b = stack.pop()
+            a = stack.pop()
+            stack.append(float(a) + float(b))
+            continue
+
+        if op == "f32.sub":
+            b = stack.pop()
+            a = stack.pop()
+            stack.append(float(a) - float(b))
+            continue
+
+        if op == "f32.mul":
+            b = stack.pop()
+            a = stack.pop()
+            stack.append(float(a) * float(b))
+            continue
+
+        if op == "f32.div":
+            b = stack.pop()
+            a = stack.pop()
+            if b == 0:
+                stack.append(float("inf") if a >= 0 else float("-inf"))
+            else:
+                stack.append(float(a) / float(b))
+            continue
+
+        if op == "f32.demote_f64":
+            # Python floats are f64, so just push as-is (precision loss handled by struct)
+            v = stack.pop()
+            # Clamp to f32 range
+            packed = struct.pack("<f", v)
+            stack.append(struct.unpack("<f", packed)[0])
+            continue
+
+        if op == "f64.promote_f32":
+            stack.append(float(stack.pop()))
+            continue
+
+        # ========== TYPE CONVERSIONS ==========
+        if op == "i32.wrap_i64":
+            v = stack.pop()
+            v = v & mask_32
+            if v >= sign_32:
+                v -= overflow_32
+            stack.append(v)
+            continue
+
+        if op == "i64.extend_i32_s":
+            v = stack.pop()
+            # Sign extend from 32 to 64 bits
+            if v & 0x80000000:
+                v = v | 0xFFFFFFFF00000000
+            stack.append(to_i64(v))
+            continue
+
+        if op == "i64.extend_i32_u":
+            v = stack.pop()
+            stack.append(v & mask_32)
+            continue
+
+        if op == "f64.convert_i32_s":
+            stack.append(float(to_i32(stack.pop())))
+            continue
+
+        if op == "f64.convert_i32_u":
+            stack.append(float(stack.pop() & mask_32))
+            continue
+
+        if op == "f64.convert_i64_s":
+            stack.append(float(to_i64(stack.pop())))
+            continue
+
+        if op == "f64.convert_i64_u":
+            stack.append(float(stack.pop() & _MASK_64))
+            continue
+
+        if op == "f32.convert_i32_s":
+            stack.append(float(to_i32(stack.pop())))
+            continue
+
+        if op == "f32.convert_i32_u":
+            stack.append(float(stack.pop() & mask_32))
+            continue
+
+        if op == "i32.trunc_f64_s":
+            v = stack.pop()
+            if math.isnan(v) or math.isinf(v):
+                raise TrapError("invalid conversion to integer")
+            iv = int(math.trunc(v))
+            if iv < -0x80000000 or iv > 0x7FFFFFFF:
+                raise TrapError("integer overflow")
+            stack.append(to_i32(iv))
+            continue
+
+        if op == "i32.trunc_f64_u":
+            v = stack.pop()
+            if math.isnan(v) or math.isinf(v):
+                raise TrapError("invalid conversion to integer")
+            iv = int(math.trunc(v))
+            if iv < 0 or iv > 0xFFFFFFFF:
+                raise TrapError("integer overflow")
+            stack.append(iv)
+            continue
+
+        if op == "i32.trunc_f32_s":
+            v = stack.pop()
+            if math.isnan(v) or math.isinf(v):
+                raise TrapError("invalid conversion to integer")
+            iv = int(math.trunc(v))
+            if iv < -0x80000000 or iv > 0x7FFFFFFF:
+                raise TrapError("integer overflow")
+            stack.append(to_i32(iv))
+            continue
+
+        if op == "i32.trunc_f32_u":
+            v = stack.pop()
+            if math.isnan(v) or math.isinf(v):
+                raise TrapError("invalid conversion to integer")
+            iv = int(math.trunc(v))
+            if iv < 0 or iv > 0xFFFFFFFF:
+                raise TrapError("integer overflow")
+            stack.append(iv)
+            continue
+
+        if op == "i64.trunc_f64_s":
+            v = stack.pop()
+            if math.isnan(v) or math.isinf(v):
+                raise TrapError("invalid conversion to integer")
+            iv = int(math.trunc(v))
+            if iv < -0x8000000000000000 or iv > 0x7FFFFFFFFFFFFFFF:
+                raise TrapError("integer overflow")
+            stack.append(to_i64(iv))
+            continue
+
+        if op == "i64.trunc_f64_u":
+            v = stack.pop()
+            if math.isnan(v) or math.isinf(v):
+                raise TrapError("invalid conversion to integer")
+            iv = int(math.trunc(v))
+            if iv < 0 or iv > 0xFFFFFFFFFFFFFFFF:
+                raise TrapError("integer overflow")
+            stack.append(iv)
+            continue
+
+        if op == "f64.reinterpret_i64":
+            v = stack.pop() & _MASK_64
+            stack.append(struct.unpack("<d", v.to_bytes(8, "little"))[0])
+            continue
+
+        if op == "i64.reinterpret_f64":
+            v = stack.pop()
+            b = struct.pack("<d", v)
+            stack.append(int.from_bytes(b, "little", signed=True))
+            continue
+
+        if op == "f32.reinterpret_i32":
+            v = stack.pop() & mask_32
+            stack.append(struct.unpack("<f", v.to_bytes(4, "little"))[0])
+            continue
+
+        if op == "i32.reinterpret_f32":
+            v = stack.pop()
+            b = struct.pack("<f", v)
+            stack.append(int.from_bytes(b, "little", signed=True))
+            continue
+
+        # ========== CALL_INDIRECT ==========
+        if op == "call_indirect":
+            type_idx, table_idx = instr.operand
+            func_table_idx = stack.pop()
+            if not instance.tables:
+                raise TrapError("undefined table")
+            table = instance.tables[table_idx]
+            if func_table_idx < 0 or func_table_idx >= len(table.elements):
+                raise TrapError("undefined element")
+            func_idx = table.elements[func_table_idx]
+            if func_idx is None:
+                raise TrapError("uninitialized element")
+            callee_func = instance.funcs[func_idx]
+            # Type check
+            if callee_func.type_idx != type_idx:
+                raise TrapError("indirect call type mismatch")
+            callee_type = instance.func_types[callee_func.type_idx]
+            n_params = len(callee_type.params)
+            if n_params > 0:
+                call_args = stack[-n_params:]
+                del stack[-n_params:]
+            else:
+                call_args = []
+            call_result = execute_function(instance, func_idx, call_args)
+            if call_result is not None:
+                if isinstance(call_result, tuple):
+                    stack.extend(call_result)
+                else:
+                    stack.append(call_result)
             continue
 
         raise TrapError(f"Unimplemented instruction: {op}")
@@ -726,6 +1578,20 @@ def find_else_end(body: list[Instruction], start_ip: int) -> tuple[int | None, i
     return _find_else_end_fast(body, start_ip, len(body))
 
 
+@dataclass(slots=True)
+class ImportedFunction:
+    """Wrapper for an imported Python function to make it callable like a WASM function."""
+
+    type_idx: int
+    callable: Callable
+    locals: tuple = ()  # Empty tuple - no locals for imported funcs
+    body: list = None  # No body for imported functions
+
+    def __post_init__(self):
+        if self.body is None:
+            self.body = []
+
+
 def instantiate(
     module: Module, imports: dict[str, dict[str, Any]] | None = None
 ) -> Instance:
@@ -744,12 +1610,30 @@ def instantiate(
     func_types = list(module.types)
 
     # Collect all functions (imports first, then module-defined)
-    funcs: list[Function] = []
+    funcs: list[Function | ImportedFunction] = []
+    imported_func_callables: dict[int, Callable] = {}
 
-    # Handle imported functions
+    # Handle imported functions first (they come before module-defined functions)
     for imp in module.imports:
         if imp.kind == "func":
-            pass
+            mod_imports = imports.get(imp.module, {})
+            func_callable = mod_imports.get(imp.name)
+            if func_callable is not None:
+                func_idx = len(funcs)
+                imported_func_callables[func_idx] = func_callable
+                funcs.append(
+                    ImportedFunction(type_idx=imp.desc, callable=func_callable)
+                )
+            else:
+                # Create a stub that will raise an error
+                funcs.append(
+                    ImportedFunction(
+                        type_idx=imp.desc,
+                        callable=lambda *args, mod=imp.module, name=imp.name: (
+                            _ for _ in ()
+                        ).throw(TrapError(f"Unresolved import: {mod}.{name}")),
+                    )
+                )
 
     # Add module-defined functions
     funcs.extend(module.funcs)
@@ -782,13 +1666,36 @@ def instantiate(
                 value = instr.operand
         globals_list.append(GlobalInstance(value, glob.type.mutable))
 
+    # Initialize tables
+    tables: list[TableInstance] = []
+    for table in module.tables:
+        elements: list[Any] = [None] * table.limits.min
+        tables.append(TableInstance(elements, table.limits.min, table.limits.max))
+
     instance = Instance(
         module=module,
         funcs=funcs,
         func_types=func_types,
         memories=memories,
         globals=globals_list,
+        tables=tables,
     )
+
+    # Store imported function callables for direct invocation
+    instance._imported_funcs = imported_func_callables
+
+    # Initialize element segments (populate tables)
+    for elem in module.elem:
+        if tables and elem.table_idx < len(tables):
+            table = tables[elem.table_idx]
+            offset = 0
+            for instr in elem.offset:
+                if instr.opcode == "i32.const":
+                    offset = instr.operand
+                    break
+            for i, func_idx in enumerate(elem.init):
+                if offset + i < len(table.elements):
+                    table.elements[offset + i] = func_idx
 
     # Run start function if present
     if module.start is not None:

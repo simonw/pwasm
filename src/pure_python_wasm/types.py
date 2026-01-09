@@ -86,7 +86,7 @@ EXPORT_KIND_ENCODING = {
 }
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Instruction:
     """A WebAssembly instruction."""
 
@@ -99,7 +99,7 @@ class Instruction:
         return self.opcode
 
 
-@dataclass
+@dataclass(slots=True)
 class Function:
     """A WebAssembly function (decoded from module)."""
 
