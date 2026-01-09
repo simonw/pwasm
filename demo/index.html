@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QuickJS in Python in WebAssembly</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+        body {
+            font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        h1 {
+            margin-bottom: 10px;
+            font-size: 28px;
+        }
+        .description {
+            margin-top: 0;
+            color: #666;
+            margin-bottom: 20px;
+        }
+        .stack-info {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 14px;
+        }
+        .stack-info code {
+            background: rgba(255,255,255,0.2);
+            padding: 2px 6px;
+            border-radius: 4px;
+        }
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #333;
+        }
+        textarea {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            font-size: 16px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+            min-height: 200px;
+            resize: vertical;
+            tab-size: 2;
+        }
+        textarea:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.25);
+        }
+        .input-group {
+            margin-bottom: 20px;
+        }
+        .button-group {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        button {
+            padding: 12px 24px;
+            cursor: pointer;
+            background-color: #667eea;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            font-size: 16px;
+            font-weight: 500;
+            transition: background-color 0.2s;
+        }
+        button:hover:not(:disabled) {
+            background-color: #5a67d8;
+        }
+        button:disabled {
+            background-color: #6c757d;
+            cursor: wait;
+            opacity: 0.7;
+        }
+        button.secondary {
+            background-color: #6c757d;
+        }
+        button.secondary:hover:not(:disabled) {
+            background-color: #545b62;
+        }
+        #status {
+            padding: 12px;
+            margin-bottom: 20px;
+            border-radius: 4px;
+            display: none;
+        }
+        #status.visible {
+            display: block;
+        }
+        #status.info {
+            background-color: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+        #status.error {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        #status.success {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        #output-section {
+            display: none;
+        }
+        #output-section.visible {
+            display: block;
+        }
+        .output-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        .output-header h2 {
+            margin: 0;
+            font-size: 20px;
+        }
+        #copy-btn {
+            padding: 6px 12px;
+            font-size: 14px;
+        }
+        #output {
+            background-color: #1e1e1e;
+            color: #d4d4d4;
+            padding: 16px;
+            border-radius: 4px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+            font-size: 14px;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            min-height: 100px;
+            max-height: 500px;
+            overflow-y: auto;
+        }
+        #output.error-output {
+            background-color: #2d1f1f;
+            color: #f8d7da;
+        }
+        .execution-time {
+            font-size: 12px;
+            color: #666;
+            margin-top: 8px;
+        }
+        .examples-section {
+            margin-bottom: 20px;
+        }
+        .examples-section h3 {
+            font-size: 14px;
+            color: #666;
+            margin: 0 0 10px 0;
+            font-weight: 500;
+        }
+        .examples-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        .example-btn {
+            padding: 6px 12px;
+            font-size: 13px;
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 20px;
+            color: #495057;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+        .example-btn:hover {
+            background: #e9ecef;
+            border-color: #adb5bd;
+            color: #212529;
+        }
+        .example-btn:active {
+            background: #dee2e6;
+        }
+        .note {
+            background-color: #fff3cd;
+            border: 1px solid #ffc107;
+            border-radius: 4px;
+            padding: 12px;
+            margin-bottom: 20px;
+            font-size: 14px;
+            color: #856404;
+        }
+        .progress-bar {
+            width: 100%;
+            height: 6px;
+            background: #e9ecef;
+            border-radius: 3px;
+            overflow: hidden;
+            margin-top: 10px;
+        }
+        .progress-bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea, #764ba2);
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+        @media (max-width: 600px) {
+            body {
+                padding: 10px;
+            }
+            h1 {
+                font-size: 24px;
+            }
+            .button-group {
+                flex-direction: column;
+            }
+            .button-group button {
+                width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <h1>QuickJS in Python in WebAssembly</h1>
+    <p class="description">Execute JavaScript using QuickJS compiled to WASM, running inside Python (via Pyodide), all in your browser!</p>
+
+    <div class="stack-info">
+        <strong>The stack:</strong> Your Browser &rarr; <code>Pyodide (Python in WASM)</code> &rarr; <code>pure_python_wasm</code> &rarr; <code>QuickJS (compiled to WASM)</code> &rarr; JavaScript execution
+    </div>
+
+    <div class="note">
+        <strong>Note:</strong> This is a proof-of-concept demonstrating a pure Python WebAssembly interpreter.
+        Performance is ~100,000x slower than native - simple expressions work, but complex code may take a while.
+        MicroQuickJS is ES5-like: no console.log, async/await, or modern APIs.
+    </div>
+
+    <div class="examples-section">
+        <h3>Try an example:</h3>
+        <div class="examples-list" id="examples-list"></div>
+    </div>
+
+    <div class="input-group">
+        <label for="code-input">JavaScript Code:</label>
+        <textarea id="code-input" placeholder="// Enter your JavaScript code here
+// The result of the last expression will be displayed">'Hello from QuickJS running in Python running in WASM!'</textarea>
+    </div>
+
+    <div class="button-group">
+        <button id="run-btn" disabled>Loading Pyodide...</button>
+        <button id="clear-btn" class="secondary">Clear</button>
+    </div>
+
+    <div id="status"></div>
+
+    <div id="output-section">
+        <div class="output-header">
+            <h2>Output</h2>
+            <button id="copy-btn" class="secondary">Copy</button>
+        </div>
+        <div id="output"></div>
+        <div class="execution-time" id="execution-time"></div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/pyodide/v0.27.0/full/pyodide.js"></script>
+    <script>
+        const examples = [
+            {
+                name: 'Hello World',
+                code: `'Hello, World!'`
+            },
+            {
+                name: 'Math',
+                code: `Math.PI * Math.pow(5, 2)`
+            },
+            {
+                name: 'Factorial',
+                code: `function factorial(n) {
+  if (n <= 1) return 1;
+  return n * factorial(n - 1);
+}
+
+'5! = ' + factorial(5)`
+            },
+            {
+                name: 'Fibonacci',
+                code: `function fib(n) {
+  if (n <= 1) return n;
+  return fib(n-1) + fib(n-2);
+}
+
+'fib(10) = ' + fib(10)`
+            },
+            {
+                name: 'Array Methods',
+                code: `var nums = [1, 2, 3, 4, 5];
+var doubled = nums.map(function(n) { return n * 2; });
+var sum = nums.reduce(function(a, b) { return a + b; }, 0);
+
+JSON.stringify({doubled: doubled, sum: sum})`
+            },
+            {
+                name: 'FizzBuzz',
+                code: `var result = [];
+for (var i = 1; i <= 15; i++) {
+  if (i % 15 === 0) result.push('FizzBuzz');
+  else if (i % 3 === 0) result.push('Fizz');
+  else if (i % 5 === 0) result.push('Buzz');
+  else result.push(i);
+}
+result.join(', ')`
+            },
+            {
+                name: 'Prime Check',
+                code: `function isPrime(n) {
+  if (n < 2) return false;
+  for (var i = 2; i * i <= n; i++) {
+    if (n % i === 0) return false;
+  }
+  return true;
+}
+
+var primes = [];
+for (var i = 2; i <= 50; i++) {
+  if (isPrime(i)) primes.push(i);
+}
+'Primes up to 50: ' + primes.join(', ')`
+            }
+        ];
+
+        const codeInput = document.getElementById('code-input');
+        const runBtn = document.getElementById('run-btn');
+        const clearBtn = document.getElementById('clear-btn');
+        const copyBtn = document.getElementById('copy-btn');
+        const statusEl = document.getElementById('status');
+        const outputSection = document.getElementById('output-section');
+        const outputEl = document.getElementById('output');
+        const executionTimeEl = document.getElementById('execution-time');
+        const examplesList = document.getElementById('examples-list');
+
+        let pyodide = null;
+        let quickjsReady = false;
+
+        // Populate examples
+        examples.forEach((example) => {
+            const btn = document.createElement('button');
+            btn.className = 'example-btn';
+            btn.textContent = example.name;
+            btn.addEventListener('click', () => {
+                codeInput.value = example.code;
+                codeInput.focus();
+            });
+            examplesList.appendChild(btn);
+        });
+
+        function showStatus(message, type = 'info') {
+            statusEl.innerHTML = message;
+            statusEl.className = `visible ${type}`;
+        }
+
+        function hideStatus() {
+            statusEl.className = '';
+        }
+
+        function showOutput(text, isError = false) {
+            outputEl.textContent = text || '(no output)';
+            outputEl.className = isError ? 'error-output' : '';
+            outputSection.classList.add('visible');
+        }
+
+        function hideOutput() {
+            outputSection.classList.remove('visible');
+        }
+
+        async function initialize() {
+            try {
+                showStatus('Loading Pyodide (Python runtime)...<div class="progress-bar"><div class="progress-bar-fill" style="width: 20%"></div></div>', 'info');
+
+                pyodide = await loadPyodide();
+
+                showStatus('Installing pure_python_wasm...<div class="progress-bar"><div class="progress-bar-fill" style="width: 50%"></div></div>', 'info');
+
+                await pyodide.loadPackage('micropip');
+                const micropip = pyodide.pyimport('micropip');
+
+                // Install from local wheel
+                await micropip.install('./pure_python_wasm-0.1.0-py3-none-any.whl');
+
+                showStatus('Loading QuickJS WASM module...<div class="progress-bar"><div class="progress-bar-fill" style="width: 75%"></div></div>', 'info');
+
+                // Fetch the WASM file and make it available to Python
+                const wasmResponse = await fetch('./mquickjs.wasm');
+                const wasmBytes = await wasmResponse.arrayBuffer();
+
+                // Make WASM bytes available to Python
+                pyodide.globals.set('wasm_bytes', new Uint8Array(wasmBytes));
+
+                // Initialize the QuickJS runtime in Python
+                await pyodide.runPythonAsync(`
+import js
+from pure_python_wasm import decode_module, instantiate
+
+# Get WASM bytes from JavaScript
+wasm_bytes = bytes(js.wasm_bytes.to_py())
+
+# Decode and instantiate the module
+module = decode_module(wasm_bytes)
+
+# Create Emscripten-compatible imports
+def abort(*args):
+    raise RuntimeError("abort called")
+
+def assert_fail(*args):
+    raise RuntimeError("assertion failed")
+
+def resize_heap(*args):
+    return 0
+
+def memcpy_big(dest, src, num):
+    return dest
+
+temp_ret = [0]
+
+def set_temp_ret0(val):
+    temp_ret[0] = val
+    return val
+
+def get_temp_ret0():
+    return temp_ret[0]
+
+def throw_longjmp(*args):
+    raise RuntimeError("longjmp")
+
+def invoke_stub(*args):
+    return 0
+
+imports = {
+    "env": {
+        "abort": abort,
+        "__assert_fail": assert_fail,
+        "emscripten_resize_heap": resize_heap,
+        "emscripten_memcpy_big": memcpy_big,
+        "setTempRet0": set_temp_ret0,
+        "getTempRet0": get_temp_ret0,
+        "_emscripten_throw_longjmp": throw_longjmp,
+        "invoke_i": invoke_stub,
+        "invoke_ii": invoke_stub,
+        "invoke_iii": invoke_stub,
+        "invoke_iiii": invoke_stub,
+        "invoke_iiiii": invoke_stub,
+        "invoke_iiiiii": invoke_stub,
+        "invoke_iiiiiii": invoke_stub,
+        "invoke_v": invoke_stub,
+        "invoke_vi": invoke_stub,
+        "invoke_vii": invoke_stub,
+        "invoke_viii": invoke_stub,
+        "invoke_viiii": invoke_stub,
+        "invoke_viiiii": invoke_stub,
+        "invoke_viiiiii": invoke_stub,
+    }
+}
+
+# Instantiate the module
+instance = instantiate(module, imports)
+
+# Get exported functions
+sandbox_init = instance.exports.sandbox_init
+sandbox_eval = instance.exports.sandbox_eval
+sandbox_free = instance.exports.sandbox_free
+sandbox_get_error = instance.exports.sandbox_get_error
+malloc = instance.exports.malloc
+free = instance.exports.free
+memory = instance.exports.memory
+
+# Initialize the sandbox
+init_result = sandbox_init(1024 * 1024)
+if init_result != 1:
+    raise RuntimeError(f"sandbox_init failed with {init_result}")
+
+def read_string(ptr):
+    """Read a null-terminated string from WASM memory."""
+    if ptr == 0:
+        return ""
+    data = memory.data
+    result = bytearray()
+    while data[ptr] != 0:
+        result.append(data[ptr])
+        ptr += 1
+    return result.decode('utf-8')
+
+def write_string(s):
+    """Write a string to WASM memory and return pointer."""
+    encoded = s.encode('utf-8') + b'\\0'
+    ptr = malloc(len(encoded))
+    if ptr == 0:
+        raise RuntimeError("malloc failed")
+    memory.data[ptr:ptr + len(encoded)] = encoded
+    return ptr
+
+def eval_js(code):
+    """Evaluate JavaScript code and return the result."""
+    code_ptr = write_string(code)
+    try:
+        result_ptr = sandbox_eval(code_ptr)
+        if result_ptr == 0:
+            error_ptr = sandbox_get_error()
+            if error_ptr:
+                error = read_string(error_ptr)
+                return None, error
+            return None, "Unknown error"
+        result = read_string(result_ptr)
+        return result, None
+    finally:
+        free(code_ptr)
+
+print("QuickJS runtime initialized!")
+`);
+
+                showStatus('Ready!<div class="progress-bar"><div class="progress-bar-fill" style="width: 100%"></div></div>', 'success');
+
+                quickjsReady = true;
+                runBtn.disabled = false;
+                runBtn.textContent = 'Run Code';
+
+                setTimeout(hideStatus, 1500);
+
+            } catch (e) {
+                showStatus('Failed to initialize: ' + e.message, 'error');
+                console.error('Initialization error:', e);
+            }
+        }
+
+        async function executeCode(code) {
+            if (!quickjsReady) {
+                showStatus('Runtime not ready', 'error');
+                return;
+            }
+
+            if (!code.trim()) {
+                showStatus('Please enter some code to execute', 'error');
+                return;
+            }
+
+            runBtn.disabled = true;
+            runBtn.textContent = 'Running...';
+            hideStatus();
+
+            const startTime = performance.now();
+
+            try {
+                // Escape the code for Python
+                const escapedCode = code.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
+
+                const result = await pyodide.runPythonAsync(`
+result, error = eval_js("""${escapedCode}""")
+(result, error)
+`);
+
+                const endTime = performance.now();
+                const executionTime = (endTime - startTime).toFixed(2);
+
+                const [jsResult, jsError] = result.toJs();
+
+                if (jsError) {
+                    showOutput('Error: ' + jsError, true);
+                } else {
+                    showOutput(jsResult || '(undefined)');
+                }
+
+                executionTimeEl.textContent = `Execution time: ${executionTime}ms`;
+
+            } catch (e) {
+                const endTime = performance.now();
+                const executionTime = (endTime - startTime).toFixed(2);
+                showOutput(`Error: ${e.message}`, true);
+                executionTimeEl.textContent = `Execution time: ${executionTime}ms`;
+            } finally {
+                runBtn.disabled = false;
+                runBtn.textContent = 'Run Code';
+            }
+        }
+
+        // Event listeners
+        runBtn.addEventListener('click', () => {
+            executeCode(codeInput.value);
+        });
+
+        clearBtn.addEventListener('click', () => {
+            codeInput.value = '';
+            hideOutput();
+            hideStatus();
+        });
+
+        copyBtn.addEventListener('click', async () => {
+            try {
+                await navigator.clipboard.writeText(outputEl.textContent);
+                copyBtn.textContent = 'Copied!';
+                setTimeout(() => {
+                    copyBtn.textContent = 'Copy';
+                }, 1500);
+            } catch (e) {
+                showStatus('Failed to copy to clipboard', 'error');
+            }
+        });
+
+        // Keyboard shortcut: Ctrl/Cmd + Enter to run
+        codeInput.addEventListener('keydown', (e) => {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                e.preventDefault();
+                if (!runBtn.disabled) {
+                    executeCode(codeInput.value);
+                }
+            }
+            if (e.key === 'Tab') {
+                e.preventDefault();
+                const start = codeInput.selectionStart;
+                const end = codeInput.selectionEnd;
+                codeInput.value = codeInput.value.substring(0, start) + '  ' + codeInput.value.substring(end);
+                codeInput.selectionStart = codeInput.selectionEnd = start + 2;
+            }
+        });
+
+        // Initialize on page load
+        initialize();
+    </script>
+</body>
+</html>

@@ -21,10 +21,10 @@ class TestQuickJSRuntimeInit:
             QuickJSRuntime(Path("/nonexistent/path/to/file.wasm"))
 
     def test_default_wasm_path(self):
-        """Test that default WASM path is in the same directory as qjs.py."""
-        # The default path should be qjs.py's parent / mquickjs.wasm
+        """Test that default WASM path is in the demo/ directory."""
+        # The default path should be qjs.py's parent / demo / mquickjs.wasm
         qjs_dir = Path(__file__).parent.parent
-        expected_path = qjs_dir / "mquickjs.wasm"
+        expected_path = qjs_dir / "demo" / "mquickjs.wasm"
 
         # Verify the WASM file exists
         assert expected_path.exists(), f"Expected WASM file at {expected_path}"
@@ -59,7 +59,7 @@ class TestWASMDecoding:
         """Test that the QuickJS WASM module can be decoded."""
         from pure_python_wasm import decode_module
 
-        wasm_path = Path(__file__).parent.parent / "mquickjs.wasm"
+        wasm_path = Path(__file__).parent.parent / "demo" / "mquickjs.wasm"
         if not wasm_path.exists():
             pytest.skip("WASM file not found")
 
@@ -82,7 +82,7 @@ class TestWASMDecoding:
         """Test WASM module has expected types and functions."""
         from pure_python_wasm import decode_module
 
-        wasm_path = Path(__file__).parent.parent / "mquickjs.wasm"
+        wasm_path = Path(__file__).parent.parent / "demo" / "mquickjs.wasm"
         if not wasm_path.exists():
             pytest.skip("WASM file not found")
 
@@ -113,7 +113,7 @@ class TestQuickJSRuntimeFunctionality:
     @pytest.fixture
     def runtime(self):
         """Create a QuickJSRuntime instance."""
-        wasm_path = Path(__file__).parent.parent / "mquickjs.wasm"
+        wasm_path = Path(__file__).parent.parent / "demo" / "mquickjs.wasm"
         if not wasm_path.exists():
             pytest.skip("WASM file not found")
         return QuickJSRuntime(wasm_path)
@@ -171,7 +171,7 @@ class TestImportFunctions:
 
     def test_imports_structure(self):
         """Test that imports have expected structure."""
-        wasm_path = Path(__file__).parent.parent / "mquickjs.wasm"
+        wasm_path = Path(__file__).parent.parent / "demo" / "mquickjs.wasm"
         if not wasm_path.exists():
             pytest.skip("WASM file not found")
 

@@ -282,7 +282,7 @@ def benchmark_if_else(num_ops=5000):
 
 def benchmark_quickjs_init():
     """Benchmark QuickJS WASM initialization (sandbox_init)."""
-    wasm_path = Path(__file__).parent / "mquickjs.wasm"
+    wasm_path = Path(__file__).parent / "demo" / "mquickjs.wasm"
     if not wasm_path.exists():
         return {
             "name": "quickjs_init",

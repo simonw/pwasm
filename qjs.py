@@ -32,10 +32,10 @@ class QuickJSRuntime:
 
         Args:
             wasm_path: Path to the mquickjs.wasm file. If None, looks in
-                       the same directory as this script.
+                       the demo/ directory relative to this script.
         """
         if wasm_path is None:
-            wasm_path = Path(__file__).parent / "mquickjs.wasm"
+            wasm_path = Path(__file__).parent / "demo" / "mquickjs.wasm"
 
         if not wasm_path.exists():
             raise FileNotFoundError(f"WASM file not found: {wasm_path}")
