@@ -270,7 +270,7 @@
         <div class="execution-time" id="execution-time"></div>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/pyodide/v0.27.0/full/pyodide.js"></script>
+    <script src="./pyodide.js"></script>
     <script>
         const examples = [
             {
@@ -384,15 +384,15 @@ for (var i = 2; i <= 50; i++) {
             try {
                 showStatus('Loading Pyodide (Python runtime)...<div class="progress-bar"><div class="progress-bar-fill" style="width: 20%"></div></div>', 'info');
 
-                pyodide = await loadPyodide();
+                pyodide = await loadPyodide({
+                    indexURL: './',
+                    lockFileURL: './pyodide-lock.json'
+                });
 
-                showStatus('Installing pure_python_wasm...<div class="progress-bar"><div class="progress-bar-fill" style="width: 50%"></div></div>', 'info');
+                showStatus('Installing packages...<div class="progress-bar"><div class="progress-bar-fill" style="width: 50%"></div></div>', 'info');
 
-                await pyodide.loadPackage('micropip');
-                const micropip = pyodide.pyimport('micropip');
-
-                // Install from local wheel
-                await micropip.install('./pure_python_wasm-0.1.0-py3-none-any.whl');
+                // Install all packages from local wheels using loadPackage
+                await pyodide.loadPackage('./pure_python_wasm-0.1.0-py3-none-any.whl');
 
                 showStatus('Loading QuickJS WASM module...<div class="progress-bar"><div class="progress-bar-fill" style="width: 75%"></div></div>', 'info');
 
@@ -400,16 +400,15 @@ for (var i = 2; i <= 50; i++) {
                 const wasmResponse = await fetch('./mquickjs.wasm');
                 const wasmBytes = await wasmResponse.arrayBuffer();
 
-                // Make WASM bytes available to Python
-                pyodide.globals.set('wasm_bytes', new Uint8Array(wasmBytes));
+                // Make WASM bytes available to Python as a global
+                pyodide.globals.set('wasm_bytes_js', new Uint8Array(wasmBytes));
 
                 // Initialize the QuickJS runtime in Python
                 await pyodide.runPythonAsync(`
-import js
 from pure_python_wasm import decode_module, instantiate
 
-# Get WASM bytes from JavaScript
-wasm_bytes = bytes(js.wasm_bytes.to_py())
+# Get WASM bytes from the global set by JavaScript
+wasm_bytes = bytes(wasm_bytes_js.to_py())
 
 # Decode and instantiate the module
 module = decode_module(wasm_bytes)
