@@ -68,7 +68,7 @@
 ## Milestone 5: i64 and Integer Conversions
 *Goal: Complete integer support*
 
-- [ ] Implement i64 value type
+- [x] Implement i64 value type (parsing and `i64.const` work)
 - [ ] Execute all i64 arithmetic operations (like i32)
 - [ ] Execute `i32.wrap_i64`
 - [ ] Execute `i64.extend_i32_s`, `i64.extend_i32_u`
@@ -78,8 +78,8 @@
 ## Milestone 6: Floating Point
 *Goal: IEEE 754 float support*
 
-- [ ] Implement f32 and f64 value types with proper bit representation
-- [ ] Execute `f32.const`, `f64.const`
+- [x] Implement f32 and f64 value types with proper bit representation
+- [x] Execute `f32.const`, `f64.const`
 - [ ] Execute `f32.add`, `f32.sub`, `f32.mul`, `f32.div` (and f64 variants)
 - [ ] Execute `f32.abs`, `f32.neg`, `f32.sqrt`
 - [ ] Execute `f32.ceil`, `f32.floor`, `f32.trunc`, `f32.nearest`
@@ -95,7 +95,7 @@
 ## Milestone 7: Linear Memory
 *Goal: Load/store operations with memory*
 
-- [ ] Implement MemoryInstance with bytearray storage
+- [x] Implement MemoryInstance with bytearray storage
 - [ ] Implement little-endian load/store helpers
 - [ ] Execute `memory.size`, `memory.grow`
 - [ ] Execute `i32.load`, `i32.load8_s`, `i32.load8_u`, `i32.load16_s`, `i32.load16_u`
@@ -105,21 +105,21 @@
 - [ ] Execute `i64.store`, `i64.store8`, `i64.store16`, `i64.store32`
 - [ ] Execute `f32.store`, `f64.store`
 - [ ] Implement memory bounds checking (trap on out-of-bounds)
-- [ ] Initialize memory from data segments
+- [x] Initialize memory from data segments
 
 ## Milestone 8: Globals
 *Goal: Global variable support*
 
-- [ ] Implement GlobalInstance
-- [ ] Parse and evaluate constant expressions for initializers
-- [ ] Execute `global.get`, `global.set`
-- [ ] Validate mutability constraints
+- [x] Implement GlobalInstance
+- [x] Parse and evaluate constant expressions for initializers
+- [x] Execute `global.get`, `global.set`
+- [x] Validate mutability constraints
 
 ## Milestone 9: Tables and Indirect Calls
 *Goal: Function pointers via tables*
 
-- [ ] Implement TableInstance
-- [ ] Initialize tables from element segments
+- [ ] Implement TableInstance (parsing works, runtime not implemented)
+- [ ] Initialize tables from element segments (parsing works, runtime not implemented)
 - [ ] Execute `call_indirect`
 - [ ] Validate indirect call type signatures
 - [ ] Execute `table.get`, `table.set` (if targeting reference types)
@@ -128,13 +128,13 @@
 ## Milestone 10: Imports and Exports
 *Goal: Module linking and Python interop*
 
-- [ ] Implement import resolution
+- [ ] Implement import resolution (parsing works, resolution not implemented)
 - [ ] Support imported functions (Python callables)
 - [ ] Support imported memories
 - [ ] Support imported globals
 - [ ] Support imported tables
-- [ ] Implement export namespace
-- [ ] Create Pythonic export accessors
+- [x] Implement export namespace
+- [x] Create Pythonic export accessors
 
 ## Milestone 11: Validation
 *Goal: Static type checking*
@@ -150,11 +150,11 @@
 ## Milestone 12: Public API Polish
 *Goal: User-friendly Python interface*
 
-- [ ] Implement `load_module()` from bytes/file/path
+- [x] Implement `decode_module()` from bytes/file/path
 - [ ] Implement `validate()` as standalone function
-- [ ] Implement `instantiate()` with imports dict
+- [x] Implement `instantiate()` with imports dict (basic version exists)
 - [ ] Add memory read/write helpers for Python
-- [ ] Add type annotations throughout
+- [x] Add type annotations throughout
 - [ ] Write comprehensive docstrings
 - [ ] Create usage examples
 
@@ -256,28 +256,25 @@
 - [ ] Pass `left-to-right.wast`
 - [ ] Pass `linking.wast`
 
-## Current Focus: Milestones 1-3
+## Current Focus: Milestones 5-7
 
-For the initial implementation, we're targeting a minimal subset:
-- Binary parsing (all sections, but initially focus on type, func, code, export)
-- Simple i32 arithmetic functions without control flow
-- Direct function calls
-- No memory, tables, or imports initially
+Milestones 1-4 are complete (binary parsing, core types, i32 interpreter, control flow).
+Milestone 8 (globals) is complete.
 
-This allows us to load and execute a `.wasm` file like:
-```wasm
-(module
-  (func (export "add") (param i32 i32) (result i32)
-    local.get 0
-    local.get 1
-    i32.add
-  )
-)
-```
+Next priorities:
+- Milestone 5: i64 arithmetic operations
+- Milestone 6: Floating point operations
+- Milestone 7: Linear memory (load/store operations)
 
-And call it from Python:
+This allows running more complex WASM modules that use 64-bit integers, floating point math, and memory.
+
+Example of current capabilities:
 ```python
-module = load_module(wasm_bytes)
+from pwism import decode_module
+from pwism.executor import instantiate
+
+# Can already do: i32 arithmetic, control flow, globals, function calls
+module = decode_module(wasm_bytes)
 instance = instantiate(module)
 assert instance.exports.add(2, 3) == 5
 ```
