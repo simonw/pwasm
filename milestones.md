@@ -270,8 +270,8 @@ This allows running more complex WASM modules that use 64-bit integers, floating
 
 Example of current capabilities:
 ```python
-from pwism import decode_module
-from pwism.executor import instantiate
+from pwasm import decode_module
+from pwasm.executor import instantiate
 
 # Can already do: i32 arithmetic, control flow, globals, function calls
 module = decode_module(wasm_bytes)

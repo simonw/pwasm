@@ -1,5 +1,5 @@
-from pwism import hello
+from pwasm import hello
 
 
 def test_hello():
-    assert hello() == "Hello from pwism!"
+    assert hello() == "Hello from pwasm!"
