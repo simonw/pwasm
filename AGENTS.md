@@ -5,7 +5,7 @@ Use uv. Run tests like this:
 Run the the library directly like this:
 
     uv run python -c '
-    import pure_python_wasm
+    import pwism
     '
 Always practice TDD: write a failing test, watch it fail, then make it pass.
 

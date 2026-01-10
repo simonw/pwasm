@@ -1,13 +1,13 @@
 """Tests for the WebAssembly binary decoder."""
 
 import pytest
-from pure_python_wasm.decoder import (
+from pwism.decoder import (
     BinaryReader,
     decode_module,
     decode_unsigned_leb128,
     decode_signed_leb128,
 )
-from pure_python_wasm.errors import DecodeError
+from pwism.errors import DecodeError
 
 
 class TestLEB128:

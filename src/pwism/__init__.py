@@ -41,4 +41,4 @@ __all__ = [
 
 
 def hello() -> str:
-    return "Hello from pure-python-wasm!"
+    return "Hello from pwism!"

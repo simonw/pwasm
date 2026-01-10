@@ -1,5 +1,5 @@
-from pure_python_wasm import hello
+from pwism import hello
 
 
 def test_hello():
-    assert hello() == "Hello from pure-python-wasm!"
+    assert hello() == "Hello from pwism!"

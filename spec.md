@@ -387,7 +387,7 @@ mem.write(addr, data: bytes)
 ## File Structure
 
 ```
-pure_python_wasm/
+pwism/
 ├── __init__.py          # Public API exports
 ├── types.py             # Value types and type definitions
 ├── decoder.py           # Binary format decoder
