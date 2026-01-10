@@ -7,7 +7,7 @@
 
 A pure Python WebAssembly runtime.
 
-> **Warning:** This is alpha software. It is significantly slower than WebAssembly runtimes that use C extensions like [wasmer-python](https://github.com/wasmerio/wasmer-python) or [wasmtime-py](https://github.com/bytecodealliance/wasmtime-py).
+> **Warning:** This is alpha software. It is significantly slower than WebAssembly runtimes with native extensions like [wasmer-python](https://github.com/wasmerio/wasmer-python) or [wasmtime-py](https://github.com/bytecodealliance/wasmtime-py).
 
 ## Overview
 
