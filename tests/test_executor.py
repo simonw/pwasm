@@ -1,9 +1,9 @@
 """Tests for the WebAssembly executor/interpreter."""
 
 import pytest
-from pure_python_wasm import decode_module
-from pure_python_wasm.executor import instantiate, Instance
-from pure_python_wasm.errors import TrapError
+from pwism import decode_module
+from pwism.executor import instantiate, Instance
+from pwism.errors import TrapError
 
 
 def make_simple_func(name: str, instr_bytes: bytes, num_params: int = 2) -> bytes:

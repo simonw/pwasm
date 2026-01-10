@@ -5,8 +5,8 @@ import pstats
 from io import StringIO
 import time
 
-from pure_python_wasm import decode_module
-from pure_python_wasm.executor import instantiate
+from pwism import decode_module
+from pwism.executor import instantiate
 
 # Import the benchmark WASM modules
 from benchmark_wasm import FIB_WASM, HEAVY_ARITH_WASM, RECURSIVE_CALL_WASM
@@ -101,7 +101,7 @@ def measure_overhead():
     iterations = 10000
 
     # Direct execute_function call
-    from pure_python_wasm.executor import execute_function
+    from pwism.executor import execute_function
 
     start = time.perf_counter()
     for _ in range(iterations):
@@ -238,7 +238,7 @@ def profile_instruction_frequency():
     print("=" * 70)
 
     # Patch execute_function to count instructions
-    from pure_python_wasm import executor
+    from pwism import executor
 
     instruction_counts = {}
     original_execute = executor.execute_function

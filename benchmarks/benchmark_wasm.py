@@ -11,9 +11,9 @@ import cProfile
 import pstats
 from io import StringIO
 
-from pure_python_wasm import decode_module
-from pure_python_wasm.executor import instantiate
-from pure_python_wasm.decoder import (
+from pwism import decode_module
+from pwism.executor import instantiate
+from pwism.decoder import (
     BinaryReader,
     decode_unsigned_leb128,
     decode_signed_leb128,
