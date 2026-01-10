@@ -1,5 +1,7 @@
 """WebAssembly binary format decoder."""
 
+from __future__ import annotations
+
 import struct
 from typing import BinaryIO
 from pathlib import Path

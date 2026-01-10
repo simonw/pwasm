@@ -6,6 +6,8 @@ Optimized version with:
 - Inlined integer conversion operations
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -48,7 +50,7 @@ def to_u64(value: int) -> int:
     return value & _MASK_64
 
 
-@dataclass(slots=True)
+@dataclass
 class Label:
     """A control flow label for block/loop/if."""
 
@@ -57,7 +59,7 @@ class Label:
     is_loop: bool = False  # True if this is a loop label
 
 
-@dataclass(slots=True)
+@dataclass
 class Frame:
     """A call frame for a function invocation."""
 
@@ -67,7 +69,7 @@ class Frame:
     module: "Instance"
 
 
-@dataclass(slots=True)
+@dataclass
 class MemoryInstance:
     """Runtime memory instance."""
 
@@ -93,7 +95,7 @@ class MemoryInstance:
         return old_size
 
 
-@dataclass(slots=True)
+@dataclass
 class GlobalInstance:
     """Runtime global variable instance."""
 
