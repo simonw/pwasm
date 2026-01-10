@@ -7,9 +7,11 @@
 
 A pure Python WebAssembly runtime.
 
+> **Warning:** This is alpha software. It is significantly slower than WebAssembly runtimes that use C extensions like [wasmer-python](https://github.com/wasmerio/wasmer-python) or [wasmtime-py](https://github.com/bytecodealliance/wasmtime-py).
+
 ## Overview
 
-`pwasm` is a WebAssembly runtime written entirely in Python with zero external dependencies. It can load and execute `.wasm` binary modules directly, making it ideal for embedding WebAssembly in Python applications without requiring any C extensions.
+`pwasm` is a WebAssembly runtime written entirely in Python with zero external dependencies. It can load and execute `.wasm` binary modules without requiring any C extensions.
 
 ## Features
 
