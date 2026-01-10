@@ -1,13 +1,20 @@
 [project]
 name = "pwasm"
 version = "0.1.0"
-description = "Add your description here"
+description = "A pure Python WebAssembly runtime"
 readme = "README.md"
 authors = [
-    { name = "Simon Willison", email = "swillison@gmail.com" }
+    { name = "Simon Willison" }
 ]
+license = "Apache-2.0"
 requires-python = ">=3.10"
 dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/simonw/pwasm"
+Changelog = "https://github.com/simonw/pwasm/releases"
+Issues = "https://github.com/simonw/pwasm/issues"
+CI = "https://github.com/simonw/pwasm/actions"
 
 [build-system]
 requires = ["uv_build>=0.9.7,<0.10.0"]
