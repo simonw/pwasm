@@ -344,3 +344,316 @@ class TestSelect:
         instance = instantiate(module)
         assert instance.exports.sel(1, 99) == 1  # condition=1, select val1
         assert instance.exports.sel(0, 99) == 99  # condition=0, select val2
+
+
+class TestI64Arithmetic:
+    """Test i64 arithmetic operations."""
+
+    def test_i64_add(self):
+        # Module with (i64, i64) -> i64 function
+        wasm = bytes(
+            [
+                0x00,
+                0x61,
+                0x73,
+                0x6D,
+                0x01,
+                0x00,
+                0x00,
+                0x00,  # magic + version
+                # Type section: (i64, i64) -> i64
+                0x01,
+                0x07,
+                0x01,
+                0x60,
+                0x02,
+                0x7E,
+                0x7E,
+                0x01,
+                0x7E,
+                # Function section
+                0x03,
+                0x02,
+                0x01,
+                0x00,
+                # Export section
+                0x07,
+                0x05,
+                0x01,
+                0x01,
+                0x66,
+                0x00,
+                0x00,  # "f"
+                # Code section: local.get 0, local.get 1, i64.add, end
+                0x0A,
+                0x09,
+                0x01,
+                0x07,
+                0x00,
+                0x20,
+                0x00,
+                0x20,
+                0x01,
+                0x7C,
+                0x0B,
+            ]
+        )
+        module = decode_module(wasm)
+        instance = instantiate(module)
+        assert instance.exports.f(10, 20) == 30
+        assert instance.exports.f(0, 0) == 0
+        # Test large values that would overflow i32
+        assert instance.exports.f(0x100000000, 1) == 0x100000001
+
+    def test_i64_add_negative(self):
+        wasm = bytes(
+            [
+                0x00,
+                0x61,
+                0x73,
+                0x6D,
+                0x01,
+                0x00,
+                0x00,
+                0x00,
+                0x01,
+                0x07,
+                0x01,
+                0x60,
+                0x02,
+                0x7E,
+                0x7E,
+                0x01,
+                0x7E,
+                0x03,
+                0x02,
+                0x01,
+                0x00,
+                0x07,
+                0x05,
+                0x01,
+                0x01,
+                0x66,
+                0x00,
+                0x00,
+                0x0A,
+                0x09,
+                0x01,
+                0x07,
+                0x00,
+                0x20,
+                0x00,
+                0x20,
+                0x01,
+                0x7C,
+                0x0B,
+            ]
+        )
+        module = decode_module(wasm)
+        instance = instantiate(module)
+        assert instance.exports.f(-1, 1) == 0
+        assert instance.exports.f(-10, -20) == -30
+
+
+class TestF32Arithmetic:
+    """Test f32 floating point operations."""
+
+    def test_f32_add(self):
+        import struct
+
+        # Module with (f32, f32) -> f32 function
+        wasm = bytes(
+            [
+                0x00,
+                0x61,
+                0x73,
+                0x6D,
+                0x01,
+                0x00,
+                0x00,
+                0x00,  # magic + version
+                # Type section: (f32, f32) -> f32
+                0x01,
+                0x07,
+                0x01,
+                0x60,
+                0x02,
+                0x7D,
+                0x7D,
+                0x01,
+                0x7D,
+                # Function section
+                0x03,
+                0x02,
+                0x01,
+                0x00,
+                # Export section
+                0x07,
+                0x05,
+                0x01,
+                0x01,
+                0x66,
+                0x00,
+                0x00,  # "f"
+                # Code section: local.get 0, local.get 1, f32.add, end
+                0x0A,
+                0x09,
+                0x01,
+                0x07,
+                0x00,
+                0x20,
+                0x00,
+                0x20,
+                0x01,
+                0x92,
+                0x0B,
+            ]
+        )
+        module = decode_module(wasm)
+        instance = instantiate(module)
+        result = instance.exports.f(1.5, 2.5)
+        assert abs(result - 4.0) < 0.0001
+        result = instance.exports.f(-1.0, 1.0)
+        assert abs(result - 0.0) < 0.0001
+
+
+class TestMemoryLoad:
+    """Test memory load operations."""
+
+    def test_i32_load(self):
+        # Module with memory and a function that loads from address
+        wasm = bytes(
+            [
+                0x00,
+                0x61,
+                0x73,
+                0x6D,
+                0x01,
+                0x00,
+                0x00,
+                0x00,  # magic + version
+                # Type section: (i32) -> i32
+                0x01,
+                0x06,
+                0x01,
+                0x60,
+                0x01,
+                0x7F,
+                0x01,
+                0x7F,
+                # Function section
+                0x03,
+                0x02,
+                0x01,
+                0x00,
+                # Memory section: 1 page min
+                0x05,
+                0x03,
+                0x01,
+                0x00,
+                0x01,
+                # Export section
+                0x07,
+                0x05,
+                0x01,
+                0x01,
+                0x66,
+                0x00,
+                0x00,  # "f"
+                # Data section: init memory at offset 0 with bytes [0x2A, 0x00, 0x00, 0x00] = 42
+                0x0B,
+                0x0A,
+                0x01,
+                0x00,
+                0x41,
+                0x00,
+                0x0B,
+                0x04,
+                0x2A,
+                0x00,
+                0x00,
+                0x00,
+                # Code section: local.get 0, i32.load (align=2, offset=0), end
+                0x0A,
+                0x09,
+                0x01,
+                0x07,
+                0x00,
+                0x20,
+                0x00,
+                0x28,
+                0x02,
+                0x00,
+                0x0B,
+            ]
+        )
+        module = decode_module(wasm)
+        instance = instantiate(module)
+        assert instance.exports.f(0) == 42
+
+    def test_i32_load_with_offset(self):
+        # Store 0x12345678 at address 4 in little-endian
+        wasm = bytes(
+            [
+                0x00,
+                0x61,
+                0x73,
+                0x6D,
+                0x01,
+                0x00,
+                0x00,
+                0x00,
+                0x01,
+                0x06,
+                0x01,
+                0x60,
+                0x01,
+                0x7F,
+                0x01,
+                0x7F,
+                0x03,
+                0x02,
+                0x01,
+                0x00,
+                0x05,
+                0x03,
+                0x01,
+                0x00,
+                0x01,
+                0x07,
+                0x05,
+                0x01,
+                0x01,
+                0x66,
+                0x00,
+                0x00,
+                # Data: offset 4, data = [0x78, 0x56, 0x34, 0x12] (little-endian 0x12345678)
+                0x0B,
+                0x0A,
+                0x01,
+                0x00,
+                0x41,
+                0x04,
+                0x0B,
+                0x04,
+                0x78,
+                0x56,
+                0x34,
+                0x12,
+                # Code: local.get 0, i32.load (align=2, offset=0), end
+                0x0A,
+                0x09,
+                0x01,
+                0x07,
+                0x00,
+                0x20,
+                0x00,
+                0x28,
+                0x02,
+                0x00,
+                0x0B,
+            ]
+        )
+        module = decode_module(wasm)
+        instance = instantiate(module)
+        assert instance.exports.f(4) == 0x12345678

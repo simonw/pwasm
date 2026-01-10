@@ -480,8 +480,33 @@ def execute_function(instance: Instance, func_idx: int, args: list[Any]) -> Any:
             stack.append(v)
             continue
 
+        if op == "i64.add":
+            b = stack.pop()
+            a = stack.pop()
+            v = (a + b) & _MASK_64
+            if v >= _SIGN_64:
+                v -= _OVERFLOW_64
+            stack.append(v)
+            continue
+
         if op == "f32.const" or op == "f64.const":
             stack.append(float(instr.operand))
+            continue
+
+        if op == "f32.add":
+            b = stack.pop()
+            a = stack.pop()
+            stack.append(a + b)
+            continue
+
+        if op == "i32.load":
+            align, offset = instr.operand
+            addr = stack.pop() + offset
+            mem = instance.memories[0].data
+            if addr < 0 or addr + 4 > len(mem):
+                raise TrapError("out of bounds memory access")
+            v = int.from_bytes(mem[addr : addr + 4], "little", signed=True)
+            stack.append(v)
             continue
 
         if op == "global.get":
