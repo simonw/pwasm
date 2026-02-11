@@ -657,3 +657,57 @@ class TestMemoryLoad:
         module = decode_module(wasm)
         instance = instantiate(module)
         assert instance.exports.f(4) == 0x12345678
+
+
+class TestCompiledRepresentation:
+    """Test that the compiled parallel-array representation is created correctly."""
+
+    def test_compiled_arrays_exist(self):
+        """After instantiation, functions should have compiled opcode/operand arrays."""
+        wasm = make_simple_func("add", bytes([0x20, 0x00, 0x20, 0x01, 0x6A, 0x0B]))
+        module = decode_module(wasm)
+        instance = instantiate(module)
+        # Should have compiled data for function 0
+        assert 0 in instance._compiled
+
+    def test_compiled_arrays_match_length(self):
+        """Compiled arrays should be <= original body length (may be shorter from fusion)."""
+        wasm = make_simple_func("add", bytes([0x20, 0x00, 0x20, 0x01, 0x6A, 0x0B]))
+        module = decode_module(wasm)
+        instance = instantiate(module)
+        ops, operands = instance._compiled[0]
+        body = instance.funcs[0].body
+        assert len(ops) <= len(body)
+        assert len(ops) == len(operands)
+
+    def test_compiled_opcodes_are_integers(self):
+        """Compiled opcodes should be integers, not strings."""
+        wasm = make_simple_func("add", bytes([0x20, 0x00, 0x20, 0x01, 0x6A, 0x0B]))
+        module = decode_module(wasm)
+        instance = instantiate(module)
+        ops, _ = instance._compiled[0]
+        for op in ops:
+            assert isinstance(op, int)
+
+
+class TestSuperInstructions:
+    """Test that super-instructions produce correct results."""
+
+    def test_copy_local_pattern(self):
+        """local.get A, local.set B should work correctly (copy local)."""
+        # (func (param i32 i32) (result i32)
+        #   local.get 1, local.set 0,  ;; copy param1 to param0
+        #   local.get 0, end)
+        wasm = make_simple_func("cp", bytes([0x20, 0x01, 0x21, 0x00, 0x20, 0x00, 0x0B]))
+        module = decode_module(wasm)
+        instance = instantiate(module)
+        assert instance.exports.cp(10, 42) == 42
+
+    def test_get_get_add_pattern(self):
+        """local.get A, local.get B, i32.add produces correct sum."""
+        # Already tested in test_add_two_numbers, but let's verify specifically
+        wasm = make_simple_func("add", bytes([0x20, 0x00, 0x20, 0x01, 0x6A, 0x0B]))
+        module = decode_module(wasm)
+        instance = instantiate(module)
+        assert instance.exports.add(100, 200) == 300
+        assert instance.exports.add(-1, -2) == -3

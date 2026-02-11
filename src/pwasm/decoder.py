@@ -24,7 +24,6 @@ from .types import (
 )
 from . import opcodes
 
-
 # WASM magic number and version
 WASM_MAGIC = b"\x00asm"
 WASM_VERSION = 1
