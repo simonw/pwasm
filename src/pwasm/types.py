@@ -3,7 +3,6 @@
 from dataclasses import dataclass
 from typing import Any
 
-
 # Value type constants
 VALTYPE_I32 = "i32"
 VALTYPE_I64 = "i64"
