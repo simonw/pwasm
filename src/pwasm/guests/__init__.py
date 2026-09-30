@@ -25,10 +25,12 @@ def load_guest(name: str, wasm_path: str | os.PathLike | None = None) -> Module:
 
 from .micropython import MicroPython, PythonError  # noqa: E402
 from .quickjs import JSError, QuickJS  # noqa: E402
+from .mquickjs import MQuickJS  # noqa: E402
 
 __all__ = [
     "JSError",
     "MicroPython",
+    "MQuickJS",
     "PythonError",
     "QuickJS",
     "guest_path",
