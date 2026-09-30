@@ -96,15 +96,15 @@
 *Goal: Load/store operations with memory*
 
 - [x] Implement MemoryInstance with bytearray storage
-- [ ] Implement little-endian load/store helpers
-- [ ] Execute `memory.size`, `memory.grow`
-- [ ] Execute `i32.load`, `i32.load8_s`, `i32.load8_u`, `i32.load16_s`, `i32.load16_u`
-- [ ] Execute `i64.load`, `i64.load8_s`, `i64.load8_u`, `i64.load16_s`, `i64.load16_u`, `i64.load32_s`, `i64.load32_u`
-- [ ] Execute `f32.load`, `f64.load`
-- [ ] Execute `i32.store`, `i32.store8`, `i32.store16`
-- [ ] Execute `i64.store`, `i64.store8`, `i64.store16`, `i64.store32`
-- [ ] Execute `f32.store`, `f64.store`
-- [ ] Implement memory bounds checking (trap on out-of-bounds)
+- [x] Implement little-endian load/store helpers
+- [x] Execute `memory.size`, `memory.grow`
+- [x] Execute `i32.load`, `i32.load8_s`, `i32.load8_u`, `i32.load16_s`, `i32.load16_u`
+- [x] Execute `i64.load`, `i64.load8_s`, `i64.load8_u`, `i64.load16_s`, `i64.load16_u`, `i64.load32_s`, `i64.load32_u`
+- [x] Execute `f32.load`, `f64.load`
+- [x] Execute `i32.store`, `i32.store8`, `i32.store16`
+- [x] Execute `i64.store`, `i64.store8`, `i64.store16`, `i64.store32`
+- [x] Execute `f32.store`, `f64.store`
+- [x] Implement memory bounds checking (trap on out-of-bounds)
 - [x] Initialize memory from data segments
 
 ## Milestone 8: Globals
@@ -206,13 +206,13 @@
 
 **Memory Tests:**
 - [ ] Pass `memory.wast`
-- [ ] Pass `memory_size.wast`
+- [x] Pass `memory_size.wast`
 - [ ] Pass `memory_grow.wast`
-- [ ] Pass `memory_trap.wast`
-- [ ] Pass `address.wast`
-- [ ] Pass `align.wast`
+- [x] Pass `memory_trap.wast`
+- [x] Pass `address.wast`
+- [x] Pass `align.wast`
 - [ ] Pass `load.wast`
-- [ ] Pass `store.wast`
+- [x] Pass `store.wast`
 - [ ] Pass `endianness.wast`
 
 **Table Tests:**
@@ -230,7 +230,7 @@
 - [ ] Pass `float_literals.wast`
 - [ ] Pass `float_exprs.wast`
 - [ ] Pass `float_misc.wast`
-- [ ] Pass `float_memory.wast`
+- [x] Pass `float_memory.wast`
 - [ ] Pass `conversions.wast`
 
 **Validation Tests:**
@@ -238,7 +238,7 @@
 - [ ] Pass `exports.wast`
 - [ ] Pass `imports.wast`
 - [ ] Pass `data.wast`
-- [ ] Pass `start.wast`
+- [x] Pass `start.wast`
 - [ ] Pass `binary.wast`
 - [ ] Pass `binary-leb128.wast`
 - [ ] Pass `custom.wast`

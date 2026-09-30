@@ -13,8 +13,6 @@ from spec_runner import run_wast
 SPEC_DIR = Path(__file__).parent / "spec"
 
 KNOWN_FAILURES = {
-    "address",
-    "align",
     "binary",
     "binary-leb128",
     "block",
@@ -38,7 +36,6 @@ KNOWN_FAILURES = {
     "fac",
     "float_exprs",
     "float_literals",
-    "float_memory",
     "float_misc",
     "func",
     "func_ptrs",
@@ -60,9 +57,6 @@ KNOWN_FAILURES = {
     "memory_fill",
     "memory_grow",
     "memory_init",
-    "memory_redundancy",
-    "memory_size",
-    "memory_trap",
     "names",
     "nop",
     "ref_func",
@@ -70,10 +64,7 @@ KNOWN_FAILURES = {
     "ref_null",
     "return",
     "select",
-    "skip-stack-guard-page",
     "stack",
-    "start",
-    "store",
     "switch",
     "table",
     "table_copy",

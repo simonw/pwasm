@@ -12,6 +12,7 @@ Compiled code is two parallel lists: `ops` (internal opcodes, below) and
 
 from __future__ import annotations
 
+import struct
 from typing import Any
 
 from . import numeric as num
@@ -66,16 +67,40 @@ from .runtime import ZERO, HostFunction
     CALL0,
     CALLN,
     CALL_HOST,
-    # 40
+    # 40: memory
+    LOAD,
+    LOAD_MASK,
+    STORE,
+    STORE_RAW,
+    I32_LOAD8_U,
+    I32_STORE8,
+    LOAD_F32,
+    STORE_F32,
+    MEMORY_SIZE,
+    MEMORY_GROW,
+    # 50
     BINOP,
     UNOP,
     UNREACHABLE,
     RETURN_IF,
-) = range(44)
+) = range(54)
 
 # Opcodes whose failures (struct.error / IndexError) mean an out of bounds
 # memory access rather than a bug.
-MEMORY_OPS = frozenset({I32_LOAD, I32_STORE})
+MEMORY_OPS = frozenset(
+    {
+        I32_LOAD,
+        I32_STORE,
+        LOAD,
+        LOAD_MASK,
+        STORE,
+        STORE_RAW,
+        I32_LOAD8_U,
+        I32_STORE8,
+        LOAD_F32,
+        STORE_F32,
+    }
+)
 
 INLINE_BINOPS = {
     "i32.add": I32_ADD,
@@ -121,11 +146,44 @@ UNOP_FUNCS: dict[str, Any] = {
     "i32.popcnt": num.i32_popcnt,
 }
 
-LOADS = {
-    "i32.load": I32_LOAD,
+
+def _unpacker(fmt: str):
+    return struct.Struct(fmt).unpack_from
+
+
+def _packer(fmt: str):
+    return struct.Struct(fmt).pack_into
+
+
+# name -> (opcode, function building the immediate from the offset)
+LOADS: dict[str, tuple[int, Any]] = {
+    "i32.load": (I32_LOAD, lambda off: off),
+    "i32.load8_u": (I32_LOAD8_U, lambda off: off),
+    "i64.load8_u": (I32_LOAD8_U, lambda off: off),
+    "i32.load8_s": (LOAD_MASK, lambda off: (_unpacker("<b"), off, MASK_32)),
+    "i32.load16_s": (LOAD_MASK, lambda off: (_unpacker("<h"), off, MASK_32)),
+    "i32.load16_u": (LOAD, lambda off: (_unpacker("<H"), off)),
+    "i64.load": (LOAD, lambda off: (_unpacker("<Q"), off)),
+    "i64.load8_s": (LOAD_MASK, lambda off: (_unpacker("<b"), off, MASK_64)),
+    "i64.load16_s": (LOAD_MASK, lambda off: (_unpacker("<h"), off, MASK_64)),
+    "i64.load16_u": (LOAD, lambda off: (_unpacker("<H"), off)),
+    "i64.load32_s": (LOAD_MASK, lambda off: (_unpacker("<i"), off, MASK_64)),
+    "i64.load32_u": (LOAD, lambda off: (_unpacker("<I"), off)),
+    "f32.load": (LOAD_F32, lambda off: off),
+    "f64.load": (LOAD, lambda off: (_unpacker("<d"), off)),
 }
 
-STORES: dict[str, int] = {}
+STORES: dict[str, tuple[int, Any]] = {
+    "i32.store": (I32_STORE, lambda off: off),
+    "i32.store8": (I32_STORE8, lambda off: off),
+    "i64.store8": (I32_STORE8, lambda off: off),
+    "i32.store16": (STORE, lambda off: (_packer("<H"), off, 0xFFFF)),
+    "i64.store16": (STORE, lambda off: (_packer("<H"), off, 0xFFFF)),
+    "i64.store32": (STORE, lambda off: (_packer("<I"), off, MASK_32)),
+    "i64.store": (STORE_RAW, lambda off: (_packer("<Q"), off)),
+    "f32.store": (STORE_F32, lambda off: off),
+    "f64.store": (STORE_RAW, lambda off: (_packer("<d"), off)),
+}
 
 
 class Code:
@@ -246,9 +304,11 @@ def compile_function(wfunc: Any) -> Code:
             emit(INLINE_BINOPS[name])
             height -= 1
         elif name in LOADS:
-            emit(LOADS[name], arg[1])
+            op, make_imm = LOADS[name]
+            emit(op, make_imm(arg[1]))
         elif name in STORES:
-            emit(STORES[name], arg[1])
+            op, make_imm = STORES[name]
+            emit(op, make_imm(arg[1]))
             height -= 2
         elif name == "br_if":
             height -= 1
@@ -354,6 +414,11 @@ def compile_function(wfunc: Any) -> Code:
         elif name == "unreachable":
             emit(UNREACHABLE)
             dead = True
+        elif name == "memory.size":
+            emit(MEMORY_SIZE)
+            height += 1
+        elif name == "memory.grow":
+            emit(MEMORY_GROW, instance.memories[0])
         elif name == "nop":
             pass
         else:

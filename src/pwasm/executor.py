@@ -51,7 +51,17 @@ from .compiler import (
     LOCAL_GET,
     LOCAL_SET,
     LOCAL_TEE,
+    LOAD,
+    LOAD_F32,
+    LOAD_MASK,
+    MEMORY_GROW,
     MEMORY_OPS,
+    MEMORY_SIZE,
+    STORE,
+    STORE_F32,
+    STORE_RAW,
+    I32_LOAD8_U,
+    I32_STORE8,
     RETURN,
     RETURN_IF,
     SELECT,
@@ -59,7 +69,7 @@ from .compiler import (
     UNREACHABLE,
 )
 from .errors import LinkError, TrapError
-from .numeric import MASK_32, MASK_64
+from .numeric import MASK_32, MASK_64, F32NaN, f32_from_bits
 from .runtime import (
     FROM_PYTHON,
     TO_PYTHON,
@@ -83,6 +93,8 @@ __all__ = [
 
 _unpack_u32 = struct.Struct("<I").unpack_from
 _pack_u32 = struct.Struct("<I").pack_into
+_unpack_f32 = struct.Struct("<f").unpack_from
+_pack_f32 = struct.Struct("<f").pack_into
 
 SIGN_32 = 0x80000000
 
@@ -266,6 +278,44 @@ def execute(func: WasmFunction, args: list) -> Any:
                         push(r)
                     elif n:
                         stack.extend(r)
+                continue
+            if op < 50:
+                if op == LOAD:
+                    unpack, off = imms[ip - 1]
+                    stack[-1] = unpack(mem, stack[-1] + off)[0]
+                elif op == I32_LOAD8_U:
+                    stack[-1] = mem[stack[-1] + imms[ip - 1]]
+                elif op == I32_STORE8:
+                    v = pop()
+                    mem[pop() + imms[ip - 1]] = v & 0xFF
+                elif op == STORE_RAW:
+                    pack, off = imms[ip - 1]
+                    v = pop()
+                    pack(mem, pop() + off, v)
+                elif op == LOAD_MASK:
+                    unpack, off, mask = imms[ip - 1]
+                    stack[-1] = unpack(mem, stack[-1] + off)[0] & mask
+                elif op == STORE:
+                    pack, off, mask = imms[ip - 1]
+                    v = pop()
+                    pack(mem, pop() + off, v & mask)
+                elif op == LOAD_F32:
+                    a = stack[-1] + imms[ip - 1]
+                    v = _unpack_f32(mem, a)[0]
+                    if v != v:
+                        v = f32_from_bits(_unpack_u32(mem, a)[0])
+                    stack[-1] = v
+                elif op == STORE_F32:
+                    v = pop()
+                    a = pop() + imms[ip - 1]
+                    if type(v) is F32NaN:
+                        _pack_u32(mem, a, v.bits)
+                    else:
+                        _pack_f32(mem, a, v)
+                elif op == MEMORY_SIZE:
+                    push(len(mem) >> 16)
+                else:  # MEMORY_GROW
+                    stack[-1] = imms[ip - 1].grow(stack[-1]) & MASK_32
                 continue
             if op == BINOP:
                 b = pop()
