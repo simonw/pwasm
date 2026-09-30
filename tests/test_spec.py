@@ -14,7 +14,6 @@ SPEC_DIR = Path(__file__).parent / "spec"
 
 KNOWN_FAILURES = {
     "bulk",
-    "comments",
     "data",
     "elem",
     "global",
@@ -24,7 +23,6 @@ KNOWN_FAILURES = {
     "memory_fill",
     "memory_grow",
     "memory_init",
-    "names",
     "table",
     "table_grow",
 }

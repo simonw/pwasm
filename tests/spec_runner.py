@@ -197,6 +197,16 @@ def parse_float_bits(text: str, bits: int) -> int:
     return _round_to_float_bits(value, sign, mant_bits, exp_bits)
 
 
+# wat2wasm refuses these "likely-confusing" characters even inside strings,
+# where the spec tests use them, so pass them as \u{...} escapes instead.
+_CONFUSING = re.compile("[\u061c\u200e\u200f\u202a-\u202e\u2066-\u206f\ufeff]")
+
+
+def wat2wasm(text: str) -> bytes:
+    text = _CONFUSING.sub(lambda m: "\\u{%x}" % ord(m.group()), text)
+    return bytes(wasmtime.wat2wasm(text))
+
+
 def f64_from_bits(bits: int) -> float:
     return struct.unpack("<d", struct.pack("<Q", bits))[0]
 
@@ -352,11 +362,13 @@ class Runner:
     def compile(self, expr: SExpr) -> bytes:
         words = [w for w in expr[1:3] if isinstance(w, str)]
         if "quote" in words:
-            raise Skip("module quote")
+            start = expr.index("quote") + 1
+            body = b"".join(parse_string(s) for s in expr[start:]).decode()
+            return wat2wasm("(module " + body + ")")
         if "binary" in words:
             start = expr.index("binary") + 1
             return b"".join(parse_string(s) for s in expr[start:])
-        return bytes(wasmtime.wat2wasm(self.text[expr.start : expr.end]))
+        return wat2wasm(self.text[expr.start : expr.end])
 
     def instantiate(self, expr: SExpr):
         module = decode_module(self.compile(expr))

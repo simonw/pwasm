@@ -239,7 +239,7 @@
 - [ ] Pass `imports.wast`
 - [ ] Pass `data.wast`
 - [x] Pass `start.wast`
-- [ ] Pass `binary.wast`
+- [x] Pass `binary.wast`
 - [x] Pass `binary-leb128.wast`
 - [ ] Pass `custom.wast`
 
@@ -250,8 +250,8 @@
 - [x] Pass `unwind.wast`
 - [ ] Pass `labels.wast`
 - [ ] Pass `forward.wast`
-- [ ] Pass `names.wast`
-- [ ] Pass `comments.wast`
+- [x] Pass `names.wast`
+- [x] Pass `comments.wast`
 - [ ] Pass `token.wast`
 - [ ] Pass `const.wast`
 - [x] Pass `switch.wast`
