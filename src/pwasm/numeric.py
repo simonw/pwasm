@@ -135,8 +135,133 @@ def i32_popcnt(a: int) -> int:
     return bin(a).count("1")
 
 
+def i32_extend8_s(a: int) -> int:
+    return (((a & 0xFF) ^ 0x80) - 0x80) & MASK_32
+
+
+def i32_extend16_s(a: int) -> int:
+    return (((a & 0xFFFF) ^ 0x8000) - 0x8000) & MASK_32
+
+
+def i32_wrap_i64(a: int) -> int:
+    return a & MASK_32
+
+
+def i64_extend_i32_s(a: int) -> int:
+    return ((a ^ SIGN_32) - SIGN_32) & MASK_64
+
+
+# --- i64 operations ---
+
+
 def i64_add(a: int, b: int) -> int:
     return (a + b) & MASK_64
+
+
+def i64_sub(a: int, b: int) -> int:
+    return (a - b) & MASK_64
+
+
+def i64_mul(a: int, b: int) -> int:
+    return (a * b) & MASK_64
+
+
+def i64_div_s(a: int, b: int) -> int:
+    if b == 0:
+        raise TrapError("integer divide by zero")
+    sa = (a ^ SIGN_64) - SIGN_64
+    sb = (b ^ SIGN_64) - SIGN_64
+    if sa == -SIGN_64 and sb == -1:
+        raise TrapError("integer overflow")
+    q = abs(sa) // abs(sb)
+    if (sa < 0) != (sb < 0):
+        q = -q
+    return q & MASK_64
+
+
+def i64_div_u(a: int, b: int) -> int:
+    if b == 0:
+        raise TrapError("integer divide by zero")
+    return a // b
+
+
+def i64_rem_s(a: int, b: int) -> int:
+    if b == 0:
+        raise TrapError("integer divide by zero")
+    sa = (a ^ SIGN_64) - SIGN_64
+    sb = (b ^ SIGN_64) - SIGN_64
+    r = abs(sa) % abs(sb)
+    if sa < 0:
+        r = -r
+    return r & MASK_64
+
+
+def i64_rem_u(a: int, b: int) -> int:
+    if b == 0:
+        raise TrapError("integer divide by zero")
+    return a % b
+
+
+def i64_shl(a: int, b: int) -> int:
+    return (a << (b & 63)) & MASK_64
+
+
+def i64_shr_s(a: int, b: int) -> int:
+    return (((a ^ SIGN_64) - SIGN_64) >> (b & 63)) & MASK_64
+
+
+def i64_shr_u(a: int, b: int) -> int:
+    return a >> (b & 63)
+
+
+def i64_rotl(a: int, b: int) -> int:
+    k = b & 63
+    return ((a << k) | (a >> (64 - k))) & MASK_64
+
+
+def i64_rotr(a: int, b: int) -> int:
+    k = b & 63
+    return ((a >> k) | (a << (64 - k))) & MASK_64
+
+
+def i64_lt_s(a: int, b: int) -> int:
+    return 1 if (a ^ SIGN_64) < (b ^ SIGN_64) else 0
+
+
+def i64_gt_s(a: int, b: int) -> int:
+    return 1 if (a ^ SIGN_64) > (b ^ SIGN_64) else 0
+
+
+def i64_le_s(a: int, b: int) -> int:
+    return 1 if (a ^ SIGN_64) <= (b ^ SIGN_64) else 0
+
+
+def i64_ge_s(a: int, b: int) -> int:
+    return 1 if (a ^ SIGN_64) >= (b ^ SIGN_64) else 0
+
+
+def i64_clz(a: int) -> int:
+    return 64 - a.bit_length()
+
+
+def i64_ctz(a: int) -> int:
+    return (a & -a).bit_length() - 1 if a else 64
+
+
+def i64_eqz(a: int) -> int:
+    return 1 if a == 0 else 0
+
+
+def i64_extend8_s(a: int) -> int:
+    return (((a & 0xFF) ^ 0x80) - 0x80) & MASK_64
+
+
+def i64_extend16_s(a: int) -> int:
+    return (((a & 0xFFFF) ^ 0x8000) - 0x8000) & MASK_64
+
+
+def i64_extend32_s(a: int) -> int:
+    return (((a & MASK_32) ^ SIGN_32) - SIGN_32) & MASK_64
 
 
 def f32_add(a: float, b: float) -> float:

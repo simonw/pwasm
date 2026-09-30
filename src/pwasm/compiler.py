@@ -12,6 +12,7 @@ Compiled code is two parallel lists: `ops` (internal opcodes, below) and
 
 from __future__ import annotations
 
+import operator
 import struct
 from typing import Any
 
@@ -137,6 +138,30 @@ BINOP_FUNCS: dict[str, Any] = {
     "i32.rotl": num.i32_rotl,
     "i32.rotr": num.i32_rotr,
     "i64.add": num.i64_add,
+    "i64.sub": num.i64_sub,
+    "i64.mul": num.i64_mul,
+    "i64.div_s": num.i64_div_s,
+    "i64.div_u": num.i64_div_u,
+    "i64.rem_s": num.i64_rem_s,
+    "i64.rem_u": num.i64_rem_u,
+    "i64.and": operator.and_,
+    "i64.or": operator.or_,
+    "i64.xor": operator.xor,
+    "i64.shl": num.i64_shl,
+    "i64.shr_s": num.i64_shr_s,
+    "i64.shr_u": num.i64_shr_u,
+    "i64.rotl": num.i64_rotl,
+    "i64.rotr": num.i64_rotr,
+    "i64.eq": operator.eq,
+    "i64.ne": operator.ne,
+    "i64.lt_u": operator.lt,
+    "i64.gt_u": operator.gt,
+    "i64.le_u": operator.le,
+    "i64.ge_u": operator.ge,
+    "i64.lt_s": num.i64_lt_s,
+    "i64.gt_s": num.i64_gt_s,
+    "i64.le_s": num.i64_le_s,
+    "i64.ge_s": num.i64_ge_s,
     "f32.add": num.f32_add,
 }
 
@@ -144,7 +169,21 @@ UNOP_FUNCS: dict[str, Any] = {
     "i32.clz": num.i32_clz,
     "i32.ctz": num.i32_ctz,
     "i32.popcnt": num.i32_popcnt,
+    "i32.extend8_s": num.i32_extend8_s,
+    "i32.extend16_s": num.i32_extend16_s,
+    "i32.wrap_i64": num.i32_wrap_i64,
+    "i64.extend_i32_s": num.i64_extend_i32_s,
+    "i64.clz": num.i64_clz,
+    "i64.ctz": num.i64_ctz,
+    "i64.popcnt": num.i32_popcnt,
+    "i64.eqz": num.i64_eqz,
+    "i64.extend8_s": num.i64_extend8_s,
+    "i64.extend16_s": num.i64_extend16_s,
+    "i64.extend32_s": num.i64_extend32_s,
 }
+
+# Instructions that leave the (internal representation of the) value alone
+IDENTITY_UNOPS = {"i64.extend_i32_u"}
 
 
 def _unpacker(fmt: str):
@@ -384,6 +423,8 @@ def compile_function(wfunc: Any) -> Code:
             height -= 1
         elif name in UNOP_FUNCS:
             emit(UNOP, UNOP_FUNCS[name])
+        elif name in IDENTITY_UNOPS:
+            pass
         elif name == "global.get":
             emit(GLOBAL_GET, instance.globals[arg])
             height += 1

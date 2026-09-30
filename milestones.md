@@ -69,11 +69,11 @@
 *Goal: Complete integer support*
 
 - [x] Implement i64 value type (parsing and `i64.const` work)
-- [ ] Execute all i64 arithmetic operations (like i32)
-- [ ] Execute `i32.wrap_i64`
-- [ ] Execute `i64.extend_i32_s`, `i64.extend_i32_u`
-- [ ] Execute `i32.extend8_s`, `i32.extend16_s`
-- [ ] Execute `i64.extend8_s`, `i64.extend16_s`, `i64.extend32_s`
+- [x] Execute all i64 arithmetic operations (like i32)
+- [x] Execute `i32.wrap_i64`
+- [x] Execute `i64.extend_i32_s`, `i64.extend_i32_u`
+- [x] Execute `i32.extend8_s`, `i32.extend16_s`
+- [x] Execute `i64.extend8_s`, `i64.extend16_s`, `i64.extend32_s`
 
 ## Milestone 6: Floating Point
 *Goal: IEEE 754 float support*
@@ -176,10 +176,10 @@
 *Goal: Pass official test suite*
 
 **Core Integer Tests:**
-- [ ] Pass `i32.wast`
-- [ ] Pass `i64.wast`
+- [x] Pass `i32.wast`
+- [x] Pass `i64.wast`
 - [ ] Pass `int_literals.wast`
-- [ ] Pass `int_exprs.wast`
+- [x] Pass `int_exprs.wast`
 
 **Control Flow Tests:**
 - [ ] Pass `block.wast`
@@ -196,7 +196,7 @@
 - [ ] Pass `func.wast`
 - [ ] Pass `call.wast`
 - [ ] Pass `call_indirect.wast`
-- [ ] Pass `fac.wast` (factorial)
+- [x] Pass `fac.wast` (factorial)
 
 **Variable Tests:**
 - [ ] Pass `local_get.wast`
@@ -245,16 +245,16 @@
 
 **Miscellaneous Tests:**
 - [ ] Pass `select.wast`
-- [ ] Pass `stack.wast`
+- [x] Pass `stack.wast`
 - [ ] Pass `traps.wast`
-- [ ] Pass `unwind.wast`
+- [x] Pass `unwind.wast`
 - [ ] Pass `labels.wast`
 - [ ] Pass `forward.wast`
 - [ ] Pass `names.wast`
 - [ ] Pass `comments.wast`
 - [ ] Pass `token.wast`
 - [ ] Pass `const.wast`
-- [ ] Pass `switch.wast`
+- [x] Pass `switch.wast`
 - [ ] Pass `left-to-right.wast`
 - [ ] Pass `linking.wast`
 
