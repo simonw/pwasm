@@ -660,33 +660,36 @@ class TestMemoryLoad:
 
 
 class TestCompiledRepresentation:
-    """Test that the compiled parallel-array representation is created correctly."""
+    """Functions are compiled on first call into flat code in which
+    structured control flow has been compiled away."""
 
-    def test_compiled_arrays_exist(self):
-        """After instantiation, functions should have compiled opcode/operand arrays."""
+    def test_compiled_on_first_call(self):
         wasm = make_simple_func("add", bytes([0x20, 0x00, 0x20, 0x01, 0x6A, 0x0B]))
-        module = decode_module(wasm)
-        instance = instantiate(module)
-        # Should have compiled data for function 0
-        assert 0 in instance._compiled
+        instance = instantiate(decode_module(wasm))
+        func = instance.functions[0]
+        assert func.code is None
+        assert instance.exports.add(1, 2) == 3
+        assert func.code is not None
 
-    def test_compiled_arrays_match_length(self):
-        """Compiled arrays should be <= original body length (may be shorter from fusion)."""
-        wasm = make_simple_func("add", bytes([0x20, 0x00, 0x20, 0x01, 0x6A, 0x0B]))
-        module = decode_module(wasm)
-        instance = instantiate(module)
-        ops, operands = instance._compiled[0]
-        body = instance.funcs[0].body
-        assert len(ops) <= len(body)
-        assert len(ops) == len(operands)
+    def test_block_loop_end_compile_to_nothing(self):
+        # block, loop, nop, end, end, local.get 0, end
+        wasm = make_simple_func(
+            "f",
+            bytes([0x02, 0x40, 0x03, 0x40, 0x01, 0x0B, 0x0B, 0x20, 0x00, 0x0B]),
+            num_params=1,
+        )
+        instance = instantiate(decode_module(wasm))
+        assert instance.exports.f(7) == 7
+        code = instance.functions[0].code
+        # just local.get and the final return
+        assert len(code.ops) == 2
+        assert len(code.ops) == len(code.imms)
 
     def test_compiled_opcodes_are_integers(self):
-        """Compiled opcodes should be integers, not strings."""
         wasm = make_simple_func("add", bytes([0x20, 0x00, 0x20, 0x01, 0x6A, 0x0B]))
-        module = decode_module(wasm)
-        instance = instantiate(module)
-        ops, _ = instance._compiled[0]
-        for op in ops:
+        instance = instantiate(decode_module(wasm))
+        instance.exports.add(1, 2)
+        for op in instance.functions[0].code.ops:
             assert isinstance(op, int)
 
 

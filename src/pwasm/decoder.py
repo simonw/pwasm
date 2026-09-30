@@ -23,6 +23,7 @@ from .types import (
     EXPORT_KIND_ENCODING,
 )
 from . import opcodes
+from .numeric import f32_from_bits
 
 # WASM magic number and version
 WASM_MAGIC = b"\x00asm"
@@ -185,7 +186,7 @@ def decode_instruction(reader: BinaryReader) -> Instruction:
 
     if opcode in opcodes.F32_IMMEDIATE:
         data = reader.read_bytes(4)
-        operand = struct.unpack("<f", data)[0]
+        operand = f32_from_bits(int.from_bytes(data, "little"))
         return Instruction(name, operand)
 
     if opcode in opcodes.F64_IMMEDIATE:
@@ -249,6 +250,15 @@ def decode_expr(reader: BinaryReader) -> list[Instruction]:
             depth -= 1
 
     return instructions
+
+
+def decode_body(code: bytes) -> list[Instruction]:
+    """Decode the instructions of a function body (after its locals)."""
+    reader = BinaryReader(code)
+    body = decode_expr(reader)
+    if not reader.eof():
+        raise DecodeError("Unexpected bytes after end of function body")
+    return body
 
 
 def decode_func_type(reader: BinaryReader) -> FuncType:
@@ -398,21 +408,17 @@ def decode_code_section(reader: BinaryReader, module: Module) -> None:
             valtype = decode_valtype(reader)
             locals_list.extend([valtype] * n)
 
-        # Instructions
-        body = decode_expr(reader)
-
-        # Verify we consumed exactly body_size bytes
+        # Instructions are decoded lazily, see Function.body
         consumed = reader.position - body_start
-        if consumed != body_size:
-            raise DecodeError(
-                f"Function body size mismatch: expected {body_size}, got {consumed}"
-            )
+        if consumed > body_size:
+            raise DecodeError("Function locals overrun the function body")
+        code = reader.read_bytes(body_size - consumed)
 
         module.funcs.append(
             Function(
                 type_idx=module._func_type_indices[i],
                 locals=tuple(locals_list),
-                body=body,
+                code=code,
             )
         )
 

@@ -95,18 +95,21 @@ except DecodeError as e:
 
 ### Components
 
-- **decoder.py** - Parses WebAssembly binary format with LEB128 decoding
+- **decoder.py** - Parses WebAssembly binary format with LEB128 decoding. Function bodies are decoded lazily, the first time they are needed
 - **types.py** - WebAssembly type system (i32, i64, f32, f64, funcref, externref)
-- **executor.py** - Stack-based bytecode interpreter
+- **compiler.py** - Compiles each function, on its first call, into flat lists of internal opcodes and immediates
+- **executor.py** - The interpreter loop, module instantiation and exports
+- **runtime.py** - Memories, globals and function instances
+- **numeric.py** - Numeric helpers (integer and floating point semantics)
 - **errors.py** - Exception hierarchy (WasmError, DecodeError, ValidationError, TrapError, LinkError)
 
 ### Execution Model
 
-pwasm uses a stack-based execution model faithful to the WebAssembly specification:
+Structured control flow is compiled away before execution: `block`, `loop` and `end` produce no code, and every branch becomes a jump to a precomputed instruction index. Operand stack heights are static in valid WebAssembly, so the compiler also knows exactly which values each branch needs to discard - the interpreter keeps no label stack.
 
-1. **Value Stack** - Operand values for instructions
-2. **Call Stack** - Function frames with locals and return addresses
-3. **Control Flow** - Pre-computed block/loop/if targets for branching
+Internally i32 and i64 values are stored as unsigned Python integers. Values are converted to signed integers when they are returned to Python code.
+
+Each WebAssembly function call is a Python call of the interpreter, so exceptions raised by Python code propagate through WebAssembly frames.
 
 ## Development
 
