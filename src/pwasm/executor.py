@@ -71,6 +71,7 @@ from .compiler import (
     UNOP,
     UNREACHABLE,
 )
+from .codegen import is_cached
 from .errors import LinkError, TrapError
 from .numeric import MASK_32, MASK_64, F32NaN, f32_from_bits
 from .runtime import (
@@ -647,6 +648,10 @@ def instantiate(
             module.types[func.type_idx], instance, func, n_imported + index
         )
         wfunc.countdown = countdown
+        # Python code another instance already compiled is worth switching
+        # to on the first call
+        if mode == "auto" and is_cached(module, wfunc.index, limits is not None):
+            wfunc.countdown = 1
         instance.functions.append(wfunc)
 
     for table in module.tables:

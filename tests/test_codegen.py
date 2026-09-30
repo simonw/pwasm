@@ -164,3 +164,15 @@ def test_tracebacks_show_generated_source():
     with pytest.raises(TrapError) as info:
         inst.exports.f(0)
     assert "i32_div_u" in "".join(traceback.format_tb(info.value.__traceback__))
+
+
+def test_auto_mode_uses_cached_code_on_first_call():
+    module = decode_module(wat2wasm(ADD))
+    first = instantiate(module, mode="auto")
+    first.exports.add(1, 1)
+    first.exports.add(1, 1)
+    assert first.functions[0].pyfunc is not None
+    # a new instance can use the code compiled for the first one straight away
+    second = instantiate(module, mode="auto")
+    second.exports.add(1, 1)
+    assert second.functions[0].pyfunc is not None

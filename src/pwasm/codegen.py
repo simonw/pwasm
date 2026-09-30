@@ -1428,6 +1428,16 @@ def python_source(wfunc: Any) -> str:
     return translator.translate()
 
 
+def _cache_key(index: int, has_limits: bool) -> tuple:
+    return (index, has_limits, FORCE_STATE_MACHINE)
+
+
+def is_cached(module: Any, index: int, has_limits: bool) -> bool:
+    """Whether Python code for this function has already been compiled."""
+    cache = getattr(module, "_python_code", None)
+    return bool(cache) and _cache_key(index, has_limits) in cache
+
+
 def compile_to_python(wfunc: Any) -> FunctionType:
     """Compile a WasmFunction to a Python function (code objects are cached
     on the module and shared between its instances)."""
@@ -1436,7 +1446,7 @@ def compile_to_python(wfunc: Any) -> FunctionType:
     cache = getattr(module, "_python_code", None)
     if cache is None:
         cache = module._python_code = {}
-    key = (wfunc.index, instance.limits is not None, FORCE_STATE_MACHINE)
+    key = _cache_key(wfunc.index, instance.limits is not None)
     code = cache.get(key)
     if code is None:
         source = python_source(wfunc)
