@@ -314,11 +314,25 @@ class HostFunction:
     None, a single value, or a tuple/list of values for multiple results.
     """
 
-    __slots__ = ("type", "fn", "n_params", "n_results", "_to_python", "_from_python")
+    __slots__ = (
+        "type",
+        "fn",
+        "raw",
+        "n_params",
+        "n_results",
+        "_to_python",
+        "_from_python",
+    )
 
-    def __init__(self, type: FuncType, fn: Callable[..., Any]) -> None:
+    def __init__(
+        self, type: FuncType, fn: Callable[..., Any], raw: bool = False
+    ) -> None:
         self.type = type
         self.fn = fn
+        # raw functions receive and return internal values (unsigned ints)
+        # without conversion: faster, for trampolines that only pass
+        # values through
+        self.raw = raw
         self.n_params = len(type.params)
         self.n_results = len(type.results)
         self._to_python = [TO_PYTHON[t] for t in type.params]
@@ -327,6 +341,8 @@ class HostFunction:
     def call(self, args: list) -> Any:
         """Call with internal values; returns internal results in the same
         shape as wasm functions (None, a value, or a list)."""
+        if self.raw:
+            return self.fn(*args)
         result = self.fn(*[conv(a) for conv, a in zip(self._to_python, args)])
         n = self.n_results
         if n == 0:
