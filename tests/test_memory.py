@@ -153,3 +153,18 @@ def test_memory_init_and_data_drop():
     e.init(0, 0, 0)
     with pytest.raises(TrapError, match="out of bounds memory access"):
         e.init(0, 0, 1)
+
+
+def test_memory_views_follow_growth():
+    from pwasm.runtime import MemoryInstance
+
+    memory = MemoryInstance(1)
+    namespace = {}
+    memory.views(namespace)
+    namespace["_M32"][1] = 0x04030201
+    assert memory.data[4:8] == b"\x01\x02\x03\x04"
+    assert memory.grow(1) == 1
+    assert len(memory.data) == 2 * 65536
+    assert len(namespace["_M32"]) == 2 * 65536 // 4
+    namespace["_M64"][65536 // 8] = 1
+    assert memory.data[65536] == 1

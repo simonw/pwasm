@@ -30,6 +30,7 @@ import bisect
 import linecache
 import math
 import struct
+import sys
 from types import FunctionType
 from typing import Any
 
@@ -310,6 +311,20 @@ LOADS = {
     "f32.load": ("f32", "_ldf32(mem, {A})"),
     "f64.load": ("f64", "_ud(mem, {A})[0]"),
 }
+
+# Loads that read aligned addresses from a memoryview of the memory (see
+# MemoryInstance.views): name -> (view, size in bytes). Faster than struct.
+VIEW_LOADS = {
+    "i32.load": ("_M32", 4),
+    "i32.load16_u": ("_M16", 2),
+    "i64.load": ("_M64", 8),
+    "i64.load16_u": ("_M16", 2),
+    "i64.load32_u": ("_M32", 4),
+    "f64.load": ("_MD", 8),
+}
+
+# memoryviews use the machine's byte order
+USE_VIEWS = sys.byteorder == "little"
 
 # name -> (how to format the value, template); {A} address, {V} value
 STORES = {
@@ -877,7 +892,33 @@ class Translator:
     def i_load(self, name: str, arg: Any) -> None:
         addr = self.pop()
         type, template = LOADS[name]
-        self.push_stmt(template.format(A=self.address(addr, arg[1])), type)
+        offset = arg[1]
+        if name not in VIEW_LOADS or not USE_VIEWS:
+            self.push_stmt(template.format(A=self.address(addr, offset)), type)
+            return
+        view, size = VIEW_LOADS[name]
+        shift = size.bit_length() - 1
+        if addr.const is not None:
+            a = addr.const + offset
+            if a % size:
+                self.push_stmt(template.format(A=a), type)
+            else:
+                self.push_stmt(f"{view}[{a >> shift}]", type)
+            return
+        if not (addr.simple and addr.masked):
+            addr = self.to_temp(V(masked(addr), "i32", simple=False))
+        base = addr.expr
+        if offset % size:
+            # the address is used three times: compute it once
+            addr = self.to_temp(V(f"{base} + {offset}", "i32", simple=False))
+            base, offset = addr.expr, 0
+        index = f"{base} >> {shift}"
+        if offset:
+            index = f"({index}) + {offset >> shift}"
+        fallback = template.format(A=self.address(addr, offset))
+        self.push_stmt(
+            f"{view}[{index}] if not {base} & {size - 1} else {fallback}", type
+        )
 
     def i_store(self, name: str, arg: Any) -> None:
         v = self.pop()
@@ -1780,6 +1821,8 @@ def instance_namespace(instance: Any) -> dict[str, Any]:
     memory = instance.memories[0] if instance.memories else None
     namespace["mem"] = memory.data if memory is not None else None
     namespace["_M0"] = memory
+    if memory is not None and USE_VIEWS:
+        memory.views(namespace)
     namespace["_L"] = instance.limits
     for j, f in enumerate(instance.functions):
         namespace[f"f{j}"] = f.entry

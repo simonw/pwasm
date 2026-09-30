@@ -88,6 +88,10 @@ class MemoryInstance:
         # An embedder-imposed cap (see Limits.max_memory), separate from the
         # maximum the module declared
         self.limit_pages: int | None = None
+        # memoryviews of data used by compiled code (see views()), and the
+        # namespaces (dictionaries) that refer to them
+        self._views: dict[str, memoryview] | None = None
+        self._namespaces: list[dict] = []
 
     @property
     def size(self) -> int:
@@ -104,8 +108,43 @@ class MemoryInstance:
         if new > limit:
             return -1
         if delta:
-            self.data.extend(bytes(delta * PAGE_SIZE))
+            # a bytearray cannot be resized while memoryviews of it exist
+            views = self._views
+            if views is not None:
+                for view in reversed(views.values()):
+                    view.release()
+                self._views = None
+            try:
+                self.data.extend(bytes(delta * PAGE_SIZE))
+            finally:
+                if views is not None:
+                    self._update_views()
         return old
+
+    def views(self, namespace: dict | None = None) -> dict[str, memoryview]:
+        """memoryviews of the memory as arrays of 16, 32 and 64-bit unsigned
+        ints (_M16, _M32, _M64) and doubles (_MD), in the machine's byte
+        order. They are replaced when the memory grows, and kept up to date
+        in namespace if given."""
+        if namespace is not None:
+            self._namespaces.append(namespace)
+        if self._views is None:
+            self._update_views()
+        elif namespace is not None:
+            namespace.update(self._views)
+        return self._views
+
+    def _update_views(self) -> None:
+        base = memoryview(self.data)
+        self._views = {
+            "_M8": base,
+            "_M16": base.cast("H"),
+            "_M32": base.cast("I"),
+            "_M64": base.cast("Q"),
+            "_MD": base.cast("d"),
+        }
+        for namespace in self._namespaces:
+            namespace.update(self._views)
 
     def read(self, ptr: int, length: int) -> bytes:
         """Read length bytes starting at ptr."""

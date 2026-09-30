@@ -1,5 +1,6 @@
 """Compiling WebAssembly functions to Python source code."""
 
+import struct
 import traceback
 
 import pytest
@@ -256,6 +257,56 @@ def test_loops_around_chains(monkeypatch, force, spin):
         # the loop and the chain share one Python loop: going round the
         # loop is just another jump in the chain
         assert ("br_" in python_source(inst.functions[0])) == (not force)
+
+
+VIEWS = """(module (memory 1)
+  (func (export "u32") (param i32) (result i32) (i32.load (local.get 0)))
+  (func (export "u32_4") (param i32) (result i32) (i32.load offset=4 (local.get 0)))
+  (func (export "u32_5") (param i32) (result i32) (i32.load offset=5 (local.get 0)))
+  (func (export "u16") (param i32) (result i32) (i32.load16_u offset=2 (local.get 0)))
+  (func (export "u64") (param i32) (result i64) (i64.load offset=8 (local.get 0)))
+  (func (export "u64_32") (param i32) (result i64) (i64.load32_u (local.get 0)))
+  (func (export "f64") (param i32) (result f64) (f64.load offset=8 (local.get 0)))
+  (func (export "const") (result i32) (i32.load (i32.const 8)))
+  (func (export "grow") (param i32) (result i32) (memory.grow (local.get 0))))"""
+
+# export -> (struct format of the result as pwasm returns it, offset)
+VIEW_LOADS = {
+    "u32": ("<i", 0),
+    "u32_4": ("<i", 4),
+    "u32_5": ("<i", 5),
+    "u16": ("<H", 2),
+    "u64": ("<q", 8),
+    "u64_32": ("<I", 0),
+    "f64": ("<d", 8),
+}
+
+
+def test_aligned_loads_use_memory_views():
+    inst = load(VIEWS)
+    memory = inst.memories[0]
+    memory.data[:256] = bytes(range(256))
+    for pages in (1, 2):
+        size = len(memory.data)
+        for name, (fmt, offset) in VIEW_LOADS.items():
+            f = getattr(inst.exports, name)
+            for addr in list(range(0, 20)) + list(range(size - 24, size + 2)):
+                if addr + offset + struct.calcsize(fmt) <= size:
+                    assert (
+                        f(addr)
+                        == struct.unpack_from(fmt, memory.data, addr + offset)[0]
+                    )
+                else:
+                    with pytest.raises(TrapError):
+                        f(addr)
+        assert inst.exports.const() == struct.unpack_from("<i", memory.data, 8)[0]
+        # after growing, the views see the new memory
+        assert inst.exports.grow(1) == pages
+        memory.data[-16:] = bytes(range(100, 116))
+    for j, name in enumerate(["u32", "u32_4", "u32_5", "u16", "u64", "u64_32", "f64"]):
+        source = python_source(inst.functions[j])
+        view = {"u16": "_M16[", "u64": "_M64[", "f64": "_MD["}.get(name, "_M32[")
+        assert view in source
 
 
 def test_deeply_nested_loops_use_a_state_machine():
