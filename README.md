@@ -16,12 +16,11 @@ A pure Python WebAssembly runtime.
 ## Features
 
 - **Pure Python** - No external dependencies or C extensions required
-- **WebAssembly MVP support** - Parses and executes WebAssembly 1.0 binary format
+- **WebAssembly 2.0 core instructions** - everything except SIMD: integer and floating point arithmetic, conversions, sign extension, saturating truncation, multi-value blocks and functions, bulk memory and reference types
+- **Passes the spec test suite** - the non-SIMD WebAssembly 2.0 core tests run in CI (validation-only tests are skipped)
 - **Pythonic API** - Access exported functions directly as Python methods
-- **i32 arithmetic** - Full support for 32-bit integer operations
-- **Control flow** - Blocks, loops, conditionals, and branching instructions
-- **Local and global variables** - Get, set, and tee operations with mutability checking
-- **Memory support** - Linear memory with data segment initialization
+- **Imports and linking** - Python functions, memories, globals and tables can be imported, including from other instances
+- **Memories, tables and globals** accessible from Python
 
 ## Installation
 
@@ -92,6 +91,45 @@ An exported function from one instance can be imported by another:
 ```python
 app = instantiate(app_module, {"lib": {"square": lib.exports.square}})
 ```
+
+### Memories, Globals and Tables
+
+Exported memories, globals and tables are available as objects:
+
+```python
+memory = instance.exports.memory
+data = memory.read(ptr, 16)       # bytes
+memory.write(ptr, b"hello")
+memory.data                       # the underlying bytearray
+memory.size                       # size in 64 KiB pages
+
+counter = instance.exports.counter
+counter.value                     # i32/i64 globals read as signed ints
+counter.value = 5                 # mutable globals only
+
+table = instance.exports.table
+func = table.get(0)               # a function reference
+func(1, 2)                        # function references can be called
+```
+
+Modules can also import memories, globals and tables, either created in Python or exported by another instance:
+
+```python
+from pwasm.runtime import GlobalInstance, MemoryInstance, TableInstance
+from pwasm.types import GlobalType
+
+memory = MemoryInstance(1, 10)  # min and max pages
+instance = instantiate(module, {
+    "env": {
+        "memory": memory,
+        "limit": 100,  # a plain number can supply an immutable global
+        "counter": GlobalInstance(GlobalType("i32", mutable=True), 0),
+        "table": TableInstance("funcref", 4),
+    }
+})
+```
+
+Host functions can call back into the instance that called them, and a Python exception raised inside a host function unwinds any WebAssembly frames in between.
 
 ### Error Handling
 

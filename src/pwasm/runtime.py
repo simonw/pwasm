@@ -208,6 +208,12 @@ class WasmFunction:
         self.code = compile_function(self)
         return self.code
 
+    def __call__(self, *args: Any) -> Any:
+        """Call with Python values, like an exported function."""
+        from .executor import call_with_python_values
+
+        return call_with_python_values(self, args)
+
     def __repr__(self) -> str:
         return f"<WasmFunction {self.index} {self.type}>"
 
@@ -243,6 +249,11 @@ class HostFunction:
         if not isinstance(result, (tuple, list)) or len(result) != n:
             raise TypeError(f"host function must return {n} values")
         return [conv(r) for conv, r in zip(self._from_python, result)]
+
+    def __call__(self, *args: Any) -> Any:
+        from .executor import call_with_python_values
+
+        return call_with_python_values(self, args)
 
     def __repr__(self) -> str:
         return f"<HostFunction {getattr(self.fn, '__name__', self.fn)} {self.type}>"

@@ -386,6 +386,11 @@ def invoke(func: WasmFunction | HostFunction, args: list) -> Any:
     return func.call(args)
 
 
+def call_with_python_values(func: WasmFunction | HostFunction, args: tuple) -> Any:
+    """Call a function object with Python values (see ExportedFunction)."""
+    return ExportedFunction(func)(*args)
+
+
 class ExportedFunction:
     """A callable for an exported function: converts Python arguments to
     internal values and results back (i32/i64 results are signed ints;
@@ -522,6 +527,49 @@ def _import_function(value: Any, ftype: Any, imp: Any) -> WasmFunction | HostFun
     raise LinkError(f"import {imp.module}.{imp.name} is not callable")
 
 
+def _incompatible(imp: Any, detail: str) -> LinkError:
+    return LinkError(f"incompatible import type for {imp.module}.{imp.name}: {detail}")
+
+
+def _limits_match(size: int, maximum: int | None, limits: Any) -> bool:
+    if size < limits.min:
+        return False
+    if limits.max is not None and (maximum is None or maximum > limits.max):
+        return False
+    return True
+
+
+def _import_memory(value: Any, imp: Any) -> MemoryInstance:
+    if not isinstance(value, MemoryInstance):
+        raise _incompatible(imp, f"expected a memory, got {type(value).__name__}")
+    if not _limits_match(value.size, value.max_pages, imp.desc):
+        raise _incompatible(imp, "memory limits do not match")
+    return value
+
+
+def _import_table(value: Any, imp: Any) -> TableInstance:
+    element_type, limits = imp.desc
+    if not isinstance(value, TableInstance):
+        raise _incompatible(imp, f"expected a table, got {type(value).__name__}")
+    if value.element_type != element_type:
+        raise _incompatible(imp, f"expected {element_type} table")
+    if not _limits_match(value.size, value.max_size, limits):
+        raise _incompatible(imp, "table limits do not match")
+    return value
+
+
+def _import_global(value: Any, imp: Any) -> GlobalInstance:
+    gtype = imp.desc
+    if isinstance(value, GlobalInstance):
+        if value.type.valtype != gtype.valtype or value.type.mutable != gtype.mutable:
+            raise _incompatible(imp, f"expected global {gtype}, got {value.type}")
+        return value
+    if gtype.mutable or not isinstance(value, (int, float)) or value is None:
+        raise _incompatible(imp, f"expected a global, got {type(value).__name__}")
+    # A plain Python number can supply an immutable global
+    return GlobalInstance(gtype, FROM_PYTHON[gtype.valtype](value))
+
+
 def instantiate(
     module: Module, imports: dict[str, dict[str, Any]] | None = None
 ) -> Instance:
@@ -544,8 +592,14 @@ def instantiate(
             instance.functions.append(
                 _import_function(value, module.types[imp.desc], imp)
             )
+        elif imp.kind == "memory":
+            instance.memories.append(_import_memory(value, imp))
+        elif imp.kind == "table":
+            instance.tables.append(_import_table(value, imp))
+        elif imp.kind == "global":
+            instance.globals.append(_import_global(value, imp))
         else:
-            raise LinkError(f"Importing a {imp.kind} is not supported yet")
+            raise LinkError(f"Unsupported import kind {imp.kind}")
 
     n_imported = len(instance.functions)
     for index, func in enumerate(module.funcs):

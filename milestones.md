@@ -130,9 +130,9 @@
 
 - [x] Implement import resolution
 - [x] Support imported functions (Python callables)
-- [ ] Support imported memories
-- [ ] Support imported globals
-- [ ] Support imported tables
+- [x] Support imported memories
+- [x] Support imported globals
+- [x] Support imported tables
 - [x] Implement export namespace
 - [x] Create Pythonic export accessors
 
@@ -145,7 +145,7 @@
 - [ ] Validate memory and table indices
 - [ ] Validate global mutability in contexts
 - [ ] Validate start function signature
-- [ ] Validate import/export matching
+- [x] Validate import/export matching
 
 ## Milestone 12: Public API Polish
 *Goal: User-friendly Python interface*
@@ -153,7 +153,7 @@
 - [x] Implement `decode_module()` from bytes/file/path
 - [ ] Implement `validate()` as standalone function
 - [x] Implement `instantiate()` with imports dict (basic version exists)
-- [ ] Add memory read/write helpers for Python
+- [x] Add memory read/write helpers for Python
 - [x] Add type annotations throughout
 - [ ] Write comprehensive docstrings
 - [ ] Create usage examples
@@ -178,7 +178,7 @@
 **Core Integer Tests:**
 - [x] Pass `i32.wast`
 - [x] Pass `i64.wast`
-- [ ] Pass `int_literals.wast`
+- [x] Pass `int_literals.wast`
 - [x] Pass `int_exprs.wast`
 
 **Control Flow Tests:**
@@ -202,12 +202,12 @@
 - [x] Pass `local_get.wast`
 - [x] Pass `local_set.wast`
 - [x] Pass `local_tee.wast`
-- [ ] Pass `global.wast`
+- [x] Pass `global.wast`
 
 **Memory Tests:**
 - [x] Pass `memory.wast`
 - [x] Pass `memory_size.wast`
-- [ ] Pass `memory_grow.wast`
+- [x] Pass `memory_grow.wast`
 - [x] Pass `memory_trap.wast`
 - [x] Pass `address.wast`
 - [x] Pass `align.wast`
@@ -216,8 +216,8 @@
 - [x] Pass `endianness.wast`
 
 **Table Tests:**
-- [ ] Pass `table.wast`
-- [ ] Pass `elem.wast`
+- [x] Pass `table.wast`
+- [x] Pass `elem.wast`
 - [x] Pass `func_ptrs.wast`
 
 **Float Tests:**
@@ -234,49 +234,38 @@
 - [x] Pass `conversions.wast`
 
 **Validation Tests:**
-- [ ] Pass `type.wast`
-- [ ] Pass `exports.wast`
-- [ ] Pass `imports.wast`
-- [ ] Pass `data.wast`
+- [x] Pass `type.wast`
+- [x] Pass `exports.wast`
+- [x] Pass `imports.wast`
+- [x] Pass `data.wast`
 - [x] Pass `start.wast`
 - [x] Pass `binary.wast`
 - [x] Pass `binary-leb128.wast`
-- [ ] Pass `custom.wast`
+- [x] Pass `custom.wast`
 
 **Miscellaneous Tests:**
 - [x] Pass `select.wast`
 - [x] Pass `stack.wast`
 - [x] Pass `traps.wast`
 - [x] Pass `unwind.wast`
-- [ ] Pass `labels.wast`
-- [ ] Pass `forward.wast`
+- [x] Pass `labels.wast`
+- [x] Pass `forward.wast`
 - [x] Pass `names.wast`
 - [x] Pass `comments.wast`
-- [ ] Pass `token.wast`
-- [ ] Pass `const.wast`
+- [x] Pass `token.wast`
+- [x] Pass `const.wast`
 - [x] Pass `switch.wast`
 - [x] Pass `left-to-right.wast`
-- [ ] Pass `linking.wast`
+- [x] Pass `linking.wast`
 
-## Current Focus: Milestones 5-7
+## Current Focus: Running real programs
 
-Milestones 1-4 are complete (binary parsing, core types, i32 interpreter, control flow).
-Milestone 8 (globals) is complete.
+Milestones 1-10 and 13 are complete, and every non-SIMD WebAssembly 2.0 core
+spec test passes (tests/spec, 25,000+ assertions; assert_invalid and
+assert_malformed are skipped because there is no validator yet).
 
 Next priorities:
-- Milestone 5: i64 arithmetic operations
-- Milestone 6: Floating point operations
-- Milestone 7: Linear memory (load/store operations)
-
-This allows running more complex WASM modules that use 64-bit integers, floating point math, and memory.
-
-Example of current capabilities:
-```python
-from pwasm import decode_module
-from pwasm.executor import instantiate
-
-# Can already do: i32 arithmetic, control flow, globals, function calls
-module = decode_module(wasm_bytes)
-instance = instantiate(module)
-assert instance.exports.add(2, 3) == 5
-```
+- Run larger programs compiled from C: MicroPython and QuickJS guests
+- WASI support for guests that use it
+- Resource limits (memory, call depth, fuel and timeouts) for sandboxing
+- Milestone 11: Validation

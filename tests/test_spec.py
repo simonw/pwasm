@@ -12,16 +12,7 @@ from spec_runner import run_wast
 
 SPEC_DIR = Path(__file__).parent / "spec"
 
-KNOWN_FAILURES = {
-    "data",
-    "elem",
-    "global",
-    "imports",
-    "linking",
-    "memory_grow",
-    "table",
-    "table_grow",
-}
+KNOWN_FAILURES: set[str] = set()
 
 
 def spec_files():
