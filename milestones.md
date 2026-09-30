@@ -87,10 +87,10 @@
 - [x] Execute `f32.copysign`
 - [x] Execute all f32 comparison ops
 - [x] Execute all f64 operations (mirrors f32)
-- [ ] Execute integer-float conversions (i32/i64 <-> f32/f64)
-- [ ] Execute `f32.reinterpret_i32`, `f64.reinterpret_i64`
-- [ ] Execute `i32.reinterpret_f32`, `i64.reinterpret_f64`
-- [ ] Handle NaN canonicalization
+- [x] Execute integer-float conversions (i32/i64 <-> f32/f64)
+- [x] Execute `f32.reinterpret_i32`, `f64.reinterpret_i64`
+- [x] Execute `i32.reinterpret_f32`, `i64.reinterpret_f64`
+- [x] Handle NaN canonicalization
 
 ## Milestone 7: Linear Memory
 *Goal: Load/store operations with memory*
@@ -199,13 +199,13 @@
 - [x] Pass `fac.wast` (factorial)
 
 **Variable Tests:**
-- [ ] Pass `local_get.wast`
-- [ ] Pass `local_set.wast`
+- [x] Pass `local_get.wast`
+- [x] Pass `local_set.wast`
 - [ ] Pass `local_tee.wast`
 - [ ] Pass `global.wast`
 
 **Memory Tests:**
-- [ ] Pass `memory.wast`
+- [x] Pass `memory.wast`
 - [x] Pass `memory_size.wast`
 - [ ] Pass `memory_grow.wast`
 - [x] Pass `memory_trap.wast`
@@ -213,7 +213,7 @@
 - [x] Pass `align.wast`
 - [ ] Pass `load.wast`
 - [x] Pass `store.wast`
-- [ ] Pass `endianness.wast`
+- [x] Pass `endianness.wast`
 
 **Table Tests:**
 - [ ] Pass `table.wast`
@@ -227,11 +227,11 @@
 - [x] Pass `f64_cmp.wast`
 - [x] Pass `f32_bitwise.wast`
 - [x] Pass `f64_bitwise.wast`
-- [ ] Pass `float_literals.wast`
-- [ ] Pass `float_exprs.wast`
+- [x] Pass `float_literals.wast`
+- [x] Pass `float_exprs.wast`
 - [x] Pass `float_misc.wast`
 - [x] Pass `float_memory.wast`
-- [ ] Pass `conversions.wast`
+- [x] Pass `conversions.wast`
 
 **Validation Tests:**
 - [ ] Pass `type.wast`
@@ -246,7 +246,7 @@
 **Miscellaneous Tests:**
 - [ ] Pass `select.wast`
 - [x] Pass `stack.wast`
-- [ ] Pass `traps.wast`
+- [x] Pass `traps.wast`
 - [x] Pass `unwind.wast`
 - [ ] Pass `labels.wast`
 - [ ] Pass `forward.wast`

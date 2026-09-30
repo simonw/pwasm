@@ -386,3 +386,26 @@ class TestDecodeSources:
     def test_memoryview(self):
         module = decode_module(memoryview(self.MINIMAL))
         assert module.funcs == []
+
+
+class TestPrefixedInstructions:
+    def test_fc_prefixed_instructions(self):
+        from pwasm.decoder import decode_body
+
+        # i32.trunc_sat_f32_s, memory.copy 0 0, memory.fill 0, table.init 3 1, end
+        body = decode_body(
+            bytes([0xFC, 0x00, 0xFC, 0x0A, 0, 0, 0xFC, 0x0B, 0, 0xFC, 0x0C, 3, 1, 0x0B])
+        )
+        assert [(i.opcode, i.operand) for i in body] == [
+            ("i32.trunc_sat_f32_s", None),
+            ("memory.copy", None),
+            ("memory.fill", None),
+            ("table.init", (3, 1)),
+            ("end", None),
+        ]
+
+    def test_simd_is_rejected(self):
+        from pwasm.decoder import decode_body
+
+        with pytest.raises(DecodeError, match="SIMD"):
+            decode_body(bytes([0xFD, 0x0C]))

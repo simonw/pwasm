@@ -163,6 +163,11 @@ def decode_instruction(reader: BinaryReader) -> Instruction:
     """Decode a single instruction."""
     opcode = reader.read_byte()
 
+    if opcode == opcodes.PREFIX_FC:
+        return decode_fc_instruction(reader)
+    if opcode == opcodes.PREFIX_SIMD:
+        raise DecodeError("SIMD instructions (0xFD prefix) are not supported")
+
     # Get opcode name
     if opcode not in opcodes.OPCODE_NAMES:
         raise DecodeError(f"Unknown opcode: 0x{opcode:02x}")
@@ -231,6 +236,33 @@ def decode_instruction(reader: BinaryReader) -> Instruction:
         return Instruction(name, reftype)
 
     raise DecodeError(f"Unhandled opcode: 0x{opcode:02x} ({name})")
+
+
+def decode_fc_instruction(reader: BinaryReader) -> Instruction:
+    """Decode an instruction with the 0xFC prefix (after the prefix)."""
+    sub = decode_unsigned_leb128(reader)
+    name = opcodes.FC_OPCODE_NAMES.get(sub)
+    if name is None:
+        raise DecodeError(f"Unknown opcode: 0xfc {sub}")
+    if sub <= 7:  # saturating truncation
+        return Instruction(name)
+    if sub == 8:  # memory.init dataidx memidx
+        data_idx = decode_unsigned_leb128(reader)
+        decode_unsigned_leb128(reader)
+        return Instruction(name, data_idx)
+    if sub in (9, 13, 15, 16, 17):  # data.drop, elem.drop, table.grow/size/fill
+        return Instruction(name, decode_unsigned_leb128(reader))
+    if sub == 10:  # memory.copy dst_mem src_mem
+        decode_unsigned_leb128(reader)
+        decode_unsigned_leb128(reader)
+        return Instruction(name)
+    if sub == 11:  # memory.fill mem
+        decode_unsigned_leb128(reader)
+        return Instruction(name)
+    # table.init elemidx tableidx, table.copy dst src
+    first = decode_unsigned_leb128(reader)
+    second = decode_unsigned_leb128(reader)
+    return Instruction(name, (first, second))
 
 
 def decode_expr(reader: BinaryReader) -> list[Instruction]:

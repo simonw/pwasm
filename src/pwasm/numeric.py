@@ -417,3 +417,134 @@ def f32_min(a: float, b: float) -> float:
 
 def f32_max(a: float, b: float) -> float:
     return float(f64_max(a, b))
+
+
+# --- conversions ---
+
+
+def _trunc(a: float, lo: int, hi: int) -> int:
+    """Truncate toward zero, trapping unless lo <= result < hi."""
+    if a != a:
+        raise TrapError("invalid conversion to integer")
+    if a in (INF, -INF):
+        raise TrapError("integer overflow")
+    t = math.trunc(a)
+    if not lo <= t < hi:
+        raise TrapError("integer overflow")
+    return t
+
+
+def _trunc_sat(a: float, lo: int, hi: int) -> int:
+    """Truncate toward zero, saturating to lo <= result < hi (NaN -> 0)."""
+    if a != a:
+        return 0
+    if a == INF:
+        return hi - 1
+    if a == -INF:
+        return lo
+    t = math.trunc(a)
+    if t < lo:
+        return lo
+    if t >= hi:
+        return hi - 1
+    return t
+
+
+def i32_trunc_s(a: float) -> int:
+    return _trunc(a, -(1 << 31), 1 << 31) & MASK_32
+
+
+def i32_trunc_u(a: float) -> int:
+    return _trunc(a, 0, 1 << 32)
+
+
+def i64_trunc_s(a: float) -> int:
+    return _trunc(a, -(1 << 63), 1 << 63) & MASK_64
+
+
+def i64_trunc_u(a: float) -> int:
+    return _trunc(a, 0, 1 << 64)
+
+
+def i32_trunc_sat_s(a: float) -> int:
+    return _trunc_sat(a, -(1 << 31), 1 << 31) & MASK_32
+
+
+def i32_trunc_sat_u(a: float) -> int:
+    return _trunc_sat(a, 0, 1 << 32)
+
+
+def i64_trunc_sat_s(a: float) -> int:
+    return _trunc_sat(a, -(1 << 63), 1 << 63) & MASK_64
+
+
+def i64_trunc_sat_u(a: float) -> int:
+    return _trunc_sat(a, 0, 1 << 64)
+
+
+def _int_to_f32(n: int) -> float:
+    """Convert an integer to the nearest f32 (ties to even), rounding once."""
+    if -(1 << 53) <= n <= (1 << 53):
+        return f32_round(float(n))  # exact as a double, rounded once
+    m = -n if n < 0 else n
+    shift = m.bit_length() - 24
+    q = m >> shift
+    r = m & ((1 << shift) - 1)
+    half = 1 << (shift - 1)
+    if r > half or (r == half and q & 1):
+        q += 1
+    value = f32_round(float(q << shift))  # q << shift is exact as a double
+    return -value if n < 0 else value
+
+
+def f32_convert_i32_s(a: int) -> float:
+    return f32_round(float((a ^ SIGN_32) - SIGN_32))
+
+
+def f32_convert_i32_u(a: int) -> float:
+    return f32_round(float(a))
+
+
+def f32_convert_i64_s(a: int) -> float:
+    return _int_to_f32((a ^ SIGN_64) - SIGN_64)
+
+
+def f32_convert_i64_u(a: int) -> float:
+    return _int_to_f32(a)
+
+
+def f64_convert_i32_s(a: int) -> float:
+    return float((a ^ SIGN_32) - SIGN_32)
+
+
+def f64_convert_i64_s(a: int) -> float:
+    # int -> float conversion in Python rounds half to even
+    return float((a ^ SIGN_64) - SIGN_64)
+
+
+def f64_convert_u(a: int) -> float:
+    return float(a)
+
+
+def f32_demote_f64(a: float) -> float:
+    return f32_round(a)
+
+
+def f64_promote_f32(a: float) -> float:
+    if a != a:
+        return a + 0.0  # a quiet (arithmetic) NaN
+    return float(a)
+
+
+_pack_f64 = struct.Struct("<d").pack
+_unpack_f64 = struct.Struct("<d").unpack
+_pack_u64 = struct.Struct("<Q").pack
+_unpack_u64 = struct.Struct("<Q").unpack
+
+
+def i64_reinterpret_f64(a: float) -> int:
+    return _unpack_u64(_pack_f64(a))[0]
+
+
+def f64_reinterpret_i64(a: int) -> float:
+    return _unpack_f64(_pack_u64(a))[0]
