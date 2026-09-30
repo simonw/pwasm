@@ -309,6 +309,33 @@ def test_aligned_loads_use_memory_views():
         assert view in source
 
 
+ADD_CONSTANTS = [1, 5, 0x7FFFFFFF, 0x80000000, 0xFFFFFFFE, 0xFFFFFFFF]
+ADD_VALUES = [0, 1, 4, 5, 0x7FFFFFFF, 0x80000000, 0xFFFFFFFA, 0xFFFFFFFF]
+
+
+@pytest.mark.parametrize("t,bits", [("i32", 32), ("i64", 64)])
+@pytest.mark.parametrize("operation", ["add", "sub"])
+def test_adding_constants_wraps_without_masking(t, bits, operation):
+    full = 1 << bits
+    constants = [c if bits == 32 else c | (c << 32) for c in ADD_CONSTANTS]
+    values = [v if bits == 32 else v | (v << 32) for v in ADD_VALUES]
+    funcs = "".join(
+        f'(func (export "f{j}") (param {t}) (result {t})'
+        f" ({t}.{operation} (local.get 0) ({t}.const {c - full if c >= full // 2 else c})))"
+        for j, c in enumerate(constants)
+    )
+    inst = load(f"(module {funcs})")
+    for j, c in enumerate(constants):
+        f = getattr(inst.exports, f"f{j}")
+        for v in values:
+            expected = (v + c if operation == "add" else v - c) % full
+            signed = expected - full if expected >= full // 2 else expected
+            assert f(v - full if v >= full // 2 else v) == signed
+        source = python_source(inst.functions[j])
+        assert "& 0xFFFF" not in source
+        assert " if l0 " in source
+
+
 def test_deeply_nested_loops_use_a_state_machine():
     inst = load(nested_loops_module(25))
     assert inst.exports.f(10) == 10

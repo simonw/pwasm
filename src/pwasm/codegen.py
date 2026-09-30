@@ -77,6 +77,7 @@ class V:
         "stable",
         "boolean",
         "const",
+        "wrap",
     )
 
     def __init__(
@@ -90,6 +91,7 @@ class V:
         stable: bool = False,
         boolean: bool = False,
         const: Any = None,
+        wrap: tuple[str, int] | None = None,
     ) -> None:
         self.expr = expr
         self.type = type
@@ -107,6 +109,9 @@ class V:
         self.boolean = boolean
         # the integer value of a constant
         self.const = const
+        # (x, d): the expression is x + d, for a masked simple x and a small
+        # constant d, so masking can be a test instead of an `&`
+        self.wrap = wrap
 
 
 def op(v: V) -> str:
@@ -118,6 +123,13 @@ def masked(v: V) -> str:
     """The expression, reduced to its type's width if necessary."""
     if v.masked:
         return v.expr
+    if v.wrap is not None:
+        # faster than masking with & in CPython
+        x, d = v.wrap
+        full = 1 << BITS[v.type]
+        if d > 0:
+            return f"{x} + {d} if {x} < {full - d} else {x} - {full - d}"
+        return f"{x} - {-d} if {x} >= {-d} else {x} + {full + d}"
     return f"{op(v)} & {MASKS[v.type]}"
 
 
@@ -125,6 +137,8 @@ def masked_op(v: V) -> str:
     """masked(), usable as an operand."""
     if v.masked:
         return op(v)
+    if v.wrap is not None:
+        return f"({masked(v)})"
     return f"({op(v)} & {MASKS[v.type]})"
 
 
@@ -485,13 +499,14 @@ class Translator:
         operands: tuple,
         masked: bool = True,
         boolean: bool = False,
+        wrap: tuple[str, int] | None = None,
     ) -> None:
         deps = _EMPTY
         gread = False
         for o in operands:
             deps = deps | o.deps
             gread = gread or o.gread
-        self.push(V(expr, type, masked, deps, gread, boolean=boolean))
+        self.push(V(expr, type, masked, deps, gread, boolean=boolean, wrap=wrap))
 
     def push_stmt(self, expr: str, type: str, masked: bool = True) -> None:
         """Evaluate expr now (it may trap or have side effects)."""
@@ -746,6 +761,8 @@ class Translator:
                     V(str(value), t, simple=True, stable=True, const=value)
                 )
                 return
+            if operation != "mul" and self.add_constant(operation, a, b):
+                return
             self.push_expr(f"{op(a)} {symbol} {op(b)}", t, (a, b), masked=False)
         elif operation == "and":
             self.push_expr(f"{op(a)} & {op(b)}", t, (a, b), masked=a.masked or b.masked)
@@ -814,6 +831,29 @@ class Translator:
             self.push_stmt(f"{t}_{operation}({masked(a)}, {masked(b)})", t)
         else:
             raise WasmError(f"cannot compile instruction {name}")
+
+    def add_constant(self, operation: str, a: V, b: V) -> bool:
+        """x + c or x - c, for a masked simple x, as x + d for a small
+        (positive or negative) d. Returns False for other operands."""
+        if b.const is not None:
+            x, c = a, b.const
+        elif operation == "add" and a.const is not None:
+            x, c = b, a.const
+        else:
+            return False
+        # x is used twice: it should be a variable
+        if not (x.masked and x.expr.isidentifier()):
+            return False
+        full = 1 << BITS[x.type]
+        d = (c if operation == "add" else -c) % full
+        if d >= full // 2:
+            d -= full
+        if d == 0:
+            self.stack.append(x)
+        else:
+            expr = f"{x.expr} + {d}" if d > 0 else f"{x.expr} - {-d}"
+            self.push_expr(expr, x.type, (x,), masked=False, wrap=(x.expr, d))
+        return True
 
     def i_int_unary(self, name: str, arg: Any) -> None:
         a = self.pop()
