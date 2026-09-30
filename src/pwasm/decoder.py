@@ -487,11 +487,12 @@ def decode_section(reader: BinaryReader, module: Module) -> None:
         raise DecodeError(f"Unknown section id: {section_id}")
 
 
-def decode_module(source: bytes | BinaryIO | Path) -> Module:
+def decode_module(source: bytes | bytearray | memoryview | BinaryIO | Path) -> Module:
     """Decode a WebAssembly module from binary format.
 
     Args:
-        source: WASM bytes, file-like object, or path to .wasm file
+        source: WASM bytes (any bytes-like object), file-like object, or path
+            to a .wasm file
 
     Returns:
         Decoded Module object
@@ -502,8 +503,8 @@ def decode_module(source: bytes | BinaryIO | Path) -> Module:
     # Handle different source types
     if isinstance(source, Path):
         data = source.read_bytes()
-    elif isinstance(source, bytes):
-        data = source
+    elif isinstance(source, (bytes, bytearray, memoryview)):
+        data = bytes(source)
     else:
         # Assume file-like object
         data = source.read()

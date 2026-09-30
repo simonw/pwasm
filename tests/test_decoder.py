@@ -372,3 +372,17 @@ class TestDecodeInstructions:
         func = module.funcs[0]
         assert func.body[0].opcode == "local.get"
         assert func.body[0].operand == 0
+
+
+class TestDecodeSources:
+    """decode_module() accepts any bytes-like object."""
+
+    MINIMAL = b"\x00asm\x01\x00\x00\x00"
+
+    def test_bytearray(self):
+        module = decode_module(bytearray(self.MINIMAL))
+        assert module.funcs == []
+
+    def test_memoryview(self):
+        module = decode_module(memoryview(self.MINIMAL))
+        assert module.funcs == []
