@@ -326,6 +326,8 @@ print(python_source(instance.functions[0]))  # the generated Python
 
 Compiled code objects are cached on the module, so further instances of the same module reuse them.
 
+Compiled code is also cached on disk, so a new process does not have to generate and compile it again: QuickJS starts up and evaluates its first expression in about 0.1s instead of 1.3s, and MicroPython in 60ms instead of 150ms. The cache lives in `~/.cache/pwasm` (or `$XDG_CACHE_HOME/pwasm`), in a directory for each module (by its SHA-256), Python version and version of the code generator; each function's generated source is kept next to its code, for tracebacks. Set the `PWASM_CACHE_DIR` environment variable to use another directory, or to an empty string to turn the cache off (`pwasm.codegen.CACHE_DIR = None` does the same from Python).
+
 ## Development
 
 ```bash

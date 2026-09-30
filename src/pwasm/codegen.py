@@ -27,11 +27,14 @@ the compiled code objects can be shared by every instance of a module.
 from __future__ import annotations
 
 import bisect
+import hashlib
 import linecache
+import marshal
 import math
+import os
 import struct
 import sys
-from types import FunctionType
+from types import CodeType, FunctionType
 from typing import Any
 
 from . import numeric as num
@@ -1905,15 +1908,126 @@ def _cache_key(index: int, has_limits: bool) -> tuple:
     return (index, has_limits, FORCE_STATE_MACHINE, FORCE_CHAINS)
 
 
+def _default_cache_dir() -> str | None:
+    configured = os.environ.get("PWASM_CACHE_DIR")
+    if configured is not None:
+        return configured or None
+    base = os.environ.get("XDG_CACHE_HOME") or os.path.join(
+        os.path.expanduser("~"), ".cache"
+    )
+    return os.path.join(base, "pwasm")
+
+
+# Where compiled code is cached between processes (None: nowhere). Set by
+# the PWASM_CACHE_DIR environment variable (empty to turn the cache off),
+# ~/.cache/pwasm by default. Only modules decoded from a binary, which have
+# a digest, are cached.
+CACHE_DIR: str | None = _default_cache_dir()
+
+_generator_version: str | None = None
+
+
+def _disk_dir(module: Any) -> str | None:
+    """The cache directory for a module's code, specific to this version of
+    Python and of the code generator."""
+    global _generator_version
+    digest = getattr(module, "digest", None)
+    if CACHE_DIR is None or digest is None:
+        return None
+    if _generator_version is None:
+        h = hashlib.sha256()
+        try:
+            for name in ("codegen.py", "runtime.py", "numeric.py"):
+                with open(os.path.join(os.path.dirname(__file__), name), "rb") as f:
+                    h.update(f.read())
+        except OSError:
+            return None
+        _generator_version = h.hexdigest()[:16]
+    tag = sys.implementation.cache_tag or sys.implementation.name
+    return os.path.join(CACHE_DIR, tag, f"{digest[:32]}-{_generator_version}")
+
+
+def _variant(key: tuple) -> str:
+    index, has_limits, state_machine, chains = key
+    return f"f{index}" + "L" * has_limits + "S" * state_machine + "C" * chains
+
+
+def _disk_names(module: Any, directory: str) -> frozenset:
+    """The files in a module's cache directory (listed once)."""
+    listing = getattr(module, "_disk_names", None)
+    if listing is None or listing[0] != directory:
+        try:
+            names = frozenset(os.listdir(directory))
+        except OSError:
+            names = frozenset()
+        listing = module._disk_names = (directory, names)
+    return listing[1]
+
+
+def _load(module: Any, key: tuple) -> CodeType | None:
+    """Code from the disk cache. Its source is in a .py file next to it,
+    which is its filename (for tracebacks)."""
+    directory = _disk_dir(module)
+    name = _variant(key)
+    if directory is None or f"{name}.bin" not in _disk_names(module, directory):
+        return None
+    try:
+        with open(os.path.join(directory, f"{name}.bin"), "rb") as f:
+            code = marshal.loads(f.read())
+    except (OSError, ValueError, EOFError, TypeError):
+        return None
+    if not isinstance(code, CodeType):
+        return None
+    filename = os.path.join(directory, f"{name}.py")
+    if code.co_filename != filename:  # the cache directory has moved
+        code = code.replace(co_filename=filename)
+    return code
+
+
+def _write(path: str, data: bytes) -> None:
+    temporary = f"{path}.{os.getpid()}.tmp"
+    try:
+        with open(temporary, "wb") as f:
+            f.write(data)
+        os.replace(temporary, path)
+    except OSError:
+        try:
+            os.remove(temporary)
+        except OSError:
+            pass
+        raise
+
+
+def _store(module: Any, key: tuple, source: str, code: CodeType) -> None:
+    directory = _disk_dir(module)
+    if directory is None:
+        return
+    name = _variant(key)
+    try:
+        os.makedirs(directory, mode=0o700, exist_ok=True)
+        _write(os.path.join(directory, f"{name}.py"), source.encode())
+        _write(os.path.join(directory, f"{name}.bin"), marshal.dumps(code))
+    except (OSError, ValueError):
+        pass
+
+
 def is_cached(module: Any, index: int, has_limits: bool) -> bool:
-    """Whether Python code for this function has already been compiled."""
+    """Whether Python code for this function has already been compiled (in
+    this process, or on disk)."""
+    key = _cache_key(index, has_limits)
     cache = getattr(module, "_python_code", None)
-    return bool(cache) and _cache_key(index, has_limits) in cache
+    if cache and key in cache:
+        return True
+    directory = _disk_dir(module)
+    return directory is not None and f"{_variant(key)}.bin" in _disk_names(
+        module, directory
+    )
 
 
 def compile_to_python(wfunc: Any) -> FunctionType:
-    """Compile a WasmFunction to a Python function (code objects are cached
-    on the module and shared between its instances)."""
+    """Compile a WasmFunction to a Python function. Code objects are cached
+    on the module, shared between its instances, and cached on disk (see
+    CACHE_DIR)."""
     instance = wfunc.instance
     module = instance.module
     cache = getattr(module, "_python_code", None)
@@ -1922,16 +2036,20 @@ def compile_to_python(wfunc: Any) -> FunctionType:
     key = _cache_key(wfunc.index, instance.limits is not None)
     code = cache.get(key)
     if code is None:
-        source = python_source(wfunc)
-        filename = f"<pwasm {id(module):x} f{wfunc.index}>"
-        linecache.cache[filename] = (
-            len(source),
-            None,
-            source.splitlines(True),
-            filename,
-        )
-        scratch: dict[str, Any] = {}
-        exec(compile(source, filename, "exec"), scratch)
-        code = scratch[f"f{wfunc.index}"].__code__
+        code = _load(module, key)
+        if code is None:
+            source = python_source(wfunc)
+            directory = _disk_dir(module)
+            if directory is not None:
+                filename = os.path.join(directory, f"{_variant(key)}.py")
+            else:
+                filename = f"<pwasm {id(module):x} {_variant(key)}>"
+            scratch: dict[str, Any] = {}
+            exec(compile(source, filename, "exec"), scratch)
+            code = scratch[f"f{wfunc.index}"].__code__
+            # for tracebacks (the cached .py file serves other processes)
+            lines = source.splitlines(True)
+            linecache.cache[filename] = (len(source), None, lines, filename)
+            _store(module, key, source, code)
         cache[key] = code
     return FunctionType(code, instance_namespace(instance), f"f{wfunc.index}")

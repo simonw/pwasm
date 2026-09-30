@@ -220,3 +220,5 @@ class Module:
         self.start = None
         self.elem = []
         self.data = []
+        # SHA-256 (hex) of the binary the module was decoded from
+        self.digest: str | None = None

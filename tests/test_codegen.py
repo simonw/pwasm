@@ -1,5 +1,6 @@
 """Compiling WebAssembly functions to Python source code."""
 
+import linecache
 import struct
 import traceback
 
@@ -437,6 +438,70 @@ def test_tracebacks_show_generated_source():
     with pytest.raises(TrapError) as info:
         inst.exports.f(0)
     assert "i32_div_u" in "".join(traceback.format_tb(info.value.__traceback__))
+
+
+DIVIDE = """(module (func (export "f") (param i32) (result i32)
+  (i32.div_u (i32.const 100) (local.get 0))))"""
+
+
+@pytest.fixture
+def disk_cache(tmp_path, monkeypatch):
+    import pwasm.codegen
+
+    monkeypatch.setattr(pwasm.codegen, "CACHE_DIR", str(tmp_path))
+    return tmp_path
+
+
+def cached_files(directory):
+    return sorted(p.name for p in directory.rglob("*") if p.is_file())
+
+
+def test_compiled_code_is_cached_on_disk(disk_cache, monkeypatch):
+    import pwasm.codegen
+
+    binary = wat2wasm(DIVIDE)
+    inst = instantiate(decode_module(binary), mode="compile")
+    assert inst.exports.f(4) == 25
+    assert cached_files(disk_cache) == ["f0.bin", "f0.py"]
+    # a new process (here: a newly decoded module) loads the code from disk
+    # instead of generating it again, and tracebacks read the source file
+    monkeypatch.setattr(pwasm.codegen, "python_source", None)
+    linecache.clearcache()
+    inst = instantiate(decode_module(binary), mode="auto")
+    assert inst.exports.f(5) == 20
+    assert inst.functions[0].pyfunc is not None
+    with pytest.raises(TrapError) as info:
+        inst.exports.f(0)
+    assert "i32_div_u" in "".join(traceback.format_tb(info.value.__traceback__))
+
+
+def test_disk_cache_keeps_variants_apart(disk_cache):
+    binary = wat2wasm(DIVIDE)
+    instantiate(decode_module(binary), mode="compile").exports.f(1)
+    limited = instantiate(decode_module(binary), mode="compile", limits=Limits())
+    limited.exports.f(1)
+    assert cached_files(disk_cache) == ["f0.bin", "f0.py", "f0L.bin", "f0L.py"]
+    assert "_L.countdown" in python_source(limited.functions[0])
+
+
+def test_disk_cache_ignores_bad_files(disk_cache):
+    binary = wat2wasm(DIVIDE)
+    instantiate(decode_module(binary), mode="compile").exports.f(1)
+    (path,) = [p for p in disk_cache.rglob("f0.bin")]
+    path.write_bytes(b"not marshal data")
+    inst = instantiate(decode_module(binary), mode="compile")
+    assert inst.exports.f(2) == 50
+    # and replaces them
+    assert path.read_bytes() != b"not marshal data"
+
+
+def test_disk_cache_can_be_turned_off(tmp_path, monkeypatch):
+    import pwasm.codegen
+
+    monkeypatch.setattr(pwasm.codegen, "CACHE_DIR", None)
+    inst = instantiate(decode_module(wat2wasm(DIVIDE)), mode="compile")
+    assert inst.exports.f(4) == 25
+    assert cached_files(tmp_path) == []
 
 
 def test_auto_mode_uses_cached_code_on_first_call():

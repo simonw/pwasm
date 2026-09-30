@@ -3,6 +3,12 @@ import pytest
 import pwasm.codegen
 import pwasm.executor
 
+
+def pytest_configure(config):
+    # tests only use the on-disk code cache when they ask for it
+    pwasm.codegen.CACHE_DIR = None
+
+
 # Every way pwasm can run code: the interpreter, compiled to structured
 # Python, compiled with every chain of blocks lowered to a dispatch loop,
 # and compiled with every function forced into a state machine

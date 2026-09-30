@@ -1,5 +1,6 @@
 """WebAssembly binary format decoder."""
 
+import hashlib
 import struct
 from typing import BinaryIO
 from pathlib import Path
@@ -588,4 +589,5 @@ def decode_module(source: bytes | bytearray | memoryview | BinaryIO | Path) -> M
     if len(getattr(module, "_func_type_indices", [])) != len(module.funcs):
         raise DecodeError("function and code section have inconsistent lengths")
 
+    module.digest = hashlib.sha256(data).hexdigest()
     return module
