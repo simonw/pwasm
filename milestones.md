@@ -258,14 +258,25 @@
 - [x] Pass `left-to-right.wast`
 - [x] Pass `linking.wast`
 
-## Current Focus: Running real programs
+## Milestone 15: Running Real Programs
+*Goal: Run interpreters compiled from C*
 
-Milestones 1-10 and 13 are complete, and every non-SIMD WebAssembly 2.0 core
-spec test passes (tests/spec, 25,000+ assertions; assert_invalid and
-assert_malformed are skipped because there is no validator yet).
+- [x] WASI preview1 subset (`pwasm.wasi.WasiLite`)
+- [x] Emscripten-style setjmp/longjmp (`pwasm.emscripten.EmscriptenSjLj`)
+- [x] Resource limits: fuel, deadlines, memory caps (`pwasm.runtime.Limits`)
+- [x] `pwasm.sandbox.Sandbox` for loading and calling guests
+- [x] MicroPython guest
+- [x] QuickJS (quickjs-ng) guest
+- [x] Micro QuickJS guest
+
+## Current Focus: Performance
+
+Milestones 1-10, 13 and 15 are complete, and every non-SIMD WebAssembly
+2.0 core spec test passes (tests/spec, 25,000+ assertions; assert_invalid
+and assert_malformed are skipped because there is no validator yet).
 
 Next priorities:
-- Run larger programs compiled from C: MicroPython and QuickJS guests
-- WASI support for guests that use it
-- Resource limits (memory, call depth, fuel and timeouts) for sandboxing
+- Speed: super-instructions for hot patterns in compiled C, and
+  compiling hot functions to Python source
+- Share compiled code between instances of the same module
 - Milestone 11: Validation

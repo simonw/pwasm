@@ -13,6 +13,18 @@ A pure Python WebAssembly runtime.
 
 `pwasm` is a WebAssembly runtime written entirely in Python with zero external dependencies. It can load and execute `.wasm` binary modules without requiring any C extensions.
 
+It is complete enough to run real programs compiled from C: pwasm bundles builds of [MicroPython](https://micropython.org/), [QuickJS](https://github.com/quickjs-ng/quickjs) and [Micro QuickJS](https://github.com/bellard/mquickjs), so you can run untrusted Python or JavaScript code in a sandbox with memory, CPU and time limits - using nothing but Python.
+
+```python
+from pwasm.guests import MicroPython, QuickJS
+
+mp = MicroPython(timeout=2.0)
+print(mp.exec("print([x * x for x in range(5)])"))  # [0, 1, 4, 9, 16]
+
+js = QuickJS(max_memory=32 * 1024 * 1024)
+print(js.eval("[1, 2, 3].map(x => x * 2)"))  # [2, 4, 6]
+```
+
 ## Features
 
 - **Pure Python** - No external dependencies or C extensions required
@@ -21,6 +33,10 @@ A pure Python WebAssembly runtime.
 - **Pythonic API** - Access exported functions directly as Python methods
 - **Imports and linking** - Python functions, memories, globals and tables can be imported, including from other instances
 - **Memories, tables and globals** accessible from Python
+- **Resource limits** - fuel (deterministic CPU budgets), wall-clock timeouts and memory caps
+- **WASI** - a small WASI preview1 subset (stdio, clocks, randomness, no filesystem)
+- **Emscripten-style setjmp/longjmp** - the `invoke_*` trampolines C code needs for exceptions
+- **Bundled guest interpreters** - MicroPython, QuickJS and Micro QuickJS
 
 ## Installation
 
@@ -153,6 +169,101 @@ print(limits.fuel_consumed)
 
 One unit of fuel is charged for every function call and every loop iteration, so the fuel a given call uses is deterministic. `max_memory` caps how far `memory.grow` can grow each memory. Instances without limits pay no overhead for these checks. `OutOfFuel` and `Timeout` are subclasses of `TrapError`.
 
+### Running Untrusted Python and JavaScript
+
+`pwasm.guests` wraps three interpreters compiled to WebAssembly (see [src/pwasm/guests/README.md](src/pwasm/guests/README.md) for where they came from). None of them can reach the filesystem or network.
+
+**MicroPython:**
+
+```python
+from pwasm import OutOfFuel, Timeout
+from pwasm.guests import MicroPython, PythonError
+
+mp = MicroPython(max_memory=32 * 1024 * 1024, timeout=5.0)
+mp.exec("x = 21")                # globals persist between calls
+print(mp.exec("print(x * 2)"))   # "42\n" - exec() returns what was printed
+
+# Python functions the guest can call, with JSON-serializable arguments
+mp.register("lookup", lambda key: {"key": key, "value": 42})
+print(mp.exec("import host\nprint(host.call('lookup', 'a'))"))
+
+try:
+    mp.exec("raise ValueError('boom')")
+except PythonError as e:
+    print(e)  # the guest traceback
+
+try:
+    mp.exec("while True:\n    pass", timeout=0.5)
+except Timeout:
+    print("stopped")
+```
+
+**QuickJS** (quickjs-ng, modern JavaScript):
+
+```python
+from pwasm.guests import QuickJS, JSError
+
+js = QuickJS(max_memory=32 * 1024 * 1024, timeout=5.0)
+
+@js.function
+def add(a, b):
+    return a + b
+
+print(js.eval("host.add(40, 2)"))           # 42
+print(js.eval("({a: [1, 2], b: 'hi'})"))    # {'a': [1, 2], 'b': 'hi'}
+js.eval("console.log('hello')")
+print(js.take_output())                      # "hello\n"
+```
+
+`eval()` returns the completion value (decoded from JSON). JavaScript exceptions raise `JSError`. `soft_timeout=` stops runaway code using QuickJS's interrupt handler, leaving the interpreter in a consistent state.
+
+**Micro QuickJS** (an ES5-style subset in a fixed-size heap, fast to start):
+
+```python
+from pwasm.guests import MQuickJS
+
+js = MQuickJS(memory_limit=1024 * 1024)
+print(js.eval("Math.max(3, 7)"))  # 7
+```
+
+All three accept `fuel=`, `timeout=` and `max_memory=` limits. After a hard limit (`Timeout`, `OutOfFuel`) stops a guest mid-execution its internal state may be inconsistent, so the safest option is to discard it and start a new one.
+
+Rough timings on CPython 3.11 (`benchmarks/guests.py`):
+
+| | MicroPython | QuickJS | Micro QuickJS |
+|---|---|---|---|
+| Start up | 11 ms | 530 ms | 27 ms |
+| Evaluate a small expression | 70 ms | 30 ms | 90 ms |
+| Recursive `fib(15)` | 670 ms | 310 ms | 280 ms |
+| 1,000 iteration loop | 380 ms | 210 ms | 120 ms |
+
+The first call into a guest also pays to compile the functions it uses. pwasm runs well on [PyPy](https://pypy.org/), which is several times faster once warmed up.
+
+### Sandbox, WASI and setjmp/longjmp
+
+The guests are built from pieces you can use for your own modules:
+
+```python
+from pwasm.sandbox import Sandbox
+
+sb = Sandbox(
+    "program.wasm",
+    imports={"env": {"log": print}},  # or a resolver(module, name, import)
+    max_memory=64 * 1024 * 1024,
+    fuel=10_000_000,
+    timeout=2.0,
+    args=["program", "--flag"],
+)
+ptr = sb.alloc(b"some input", nul=True)  # copied in using the guest's malloc
+result = sb.call("process", ptr)
+print(sb.stdout)
+sb.free(ptr)
+```
+
+`Sandbox` serves WASI imports with `pwasm.wasi.WasiLite`: captured stdout and stderr, stdin from bytes, clocks, randomness, arguments and environment variables. It provides no filesystem or network access. `pwasm.emscripten.EmscriptenSjLj` implements the `invoke_*` trampolines that C code compiled with emscripten-style setjmp/longjmp (used for C++ exceptions and MicroPython's error handling) imports.
+
+Since every WebAssembly function call is a Python function call, `Sandbox` raises Python's recursion limit (to 20,000, or 8,000 on Python 3.10 and PyPy).
+
 ### Error Handling
 
 ```python
@@ -180,7 +291,9 @@ except DecodeError as e:
 - **types.py** - WebAssembly type system (i32, i64, f32, f64, funcref, externref)
 - **compiler.py** - Compiles each function, on its first call, into flat lists of internal opcodes and immediates
 - **executor.py** - The interpreter loop, module instantiation and exports
-- **runtime.py** - Memories, globals and function instances
+- **runtime.py** - Memories, tables, globals, function instances and resource limits
+- **sandbox.py**, **wasi.py**, **emscripten.py** - Running real programs: import resolution, WASI and setjmp/longjmp
+- **guests/** - MicroPython, QuickJS and Micro QuickJS guests
 - **numeric.py** - Numeric helpers (integer and floating point semantics)
 - **errors.py** - Exception hierarchy (WasmError, DecodeError, ValidationError, TrapError, LinkError)
 
@@ -199,8 +312,14 @@ Each WebAssembly function call is a Python call of the interpreter, so exception
 git clone https://github.com/simonw/pwasm
 cd pwasm
 
-# Run tests
+# Run tests (including the WebAssembly spec test suite in tests/spec)
 uv run pytest
+
+# Summarize spec test results for some files
+uv run python tests/spec_runner.py tests/spec/i32.wast tests/spec/f64.wast
+
+# Time the guest interpreters
+uv run python benchmarks/guests.py
 
 # Format code
 uv run black .
