@@ -13,7 +13,6 @@ from spec_runner import run_wast
 SPEC_DIR = Path(__file__).parent / "spec"
 
 KNOWN_FAILURES = {
-    "binary",
     "bulk",
     "comments",
     "data",

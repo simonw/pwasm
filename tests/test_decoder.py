@@ -409,3 +409,23 @@ class TestPrefixedInstructions:
 
         with pytest.raises(DecodeError, match="SIMD"):
             decode_body(bytes([0xFD, 0x0C]))
+
+
+class TestSectionConsistency:
+    def test_empty_code_section_without_function_section(self):
+        module = decode_module(b"\x00asm\x01\x00\x00\x00" + bytes([0x0A, 0x01, 0x00]))
+        assert module.funcs == []
+
+    def test_code_section_without_function_section_is_an_error(self):
+        with pytest.raises(DecodeError, match="inconsistent"):
+            decode_module(
+                b"\x00asm\x01\x00\x00\x00" + bytes([0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B])
+            )
+
+    def test_function_section_without_code_section_is_an_error(self):
+        # type section: () -> (), function section: one function of type 0
+        wasm = b"\x00asm\x01\x00\x00\x00" + bytes(
+            [0x01, 0x04, 0x01, 0x60, 0x00, 0x00, 0x03, 0x02, 0x01, 0x00]
+        )
+        with pytest.raises(DecodeError, match="inconsistent"):
+            decode_module(wasm)

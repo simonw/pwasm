@@ -437,14 +437,12 @@ def decode_element_section(reader: BinaryReader, module: Module) -> None:
 def decode_code_section(reader: BinaryReader, module: Module) -> None:
     """Decode the code section."""
     count = decode_unsigned_leb128(reader)
+    type_indices = getattr(module, "_func_type_indices", [])
 
-    if not hasattr(module, "_func_type_indices"):
-        raise DecodeError("Code section without function section")
-
-    if count != len(module._func_type_indices):
+    if count != len(type_indices):
         raise DecodeError(
-            f"Code section count ({count}) != function section count "
-            f"({len(module._func_type_indices)})"
+            f"function and code section have inconsistent lengths: code section "
+            f"count ({count}) != function section count ({len(type_indices)})"
         )
 
     for i in range(count):
@@ -467,7 +465,7 @@ def decode_code_section(reader: BinaryReader, module: Module) -> None:
 
         module.funcs.append(
             Function(
-                type_idx=module._func_type_indices[i],
+                type_idx=type_indices[i],
                 locals=tuple(locals_list),
                 code=code,
             )
@@ -586,5 +584,8 @@ def decode_module(source: bytes | bytearray | memoryview | BinaryIO | Path) -> M
 
     while not reader.eof():
         decode_section(reader, module)
+
+    if len(getattr(module, "_func_type_indices", [])) != len(module.funcs):
+        raise DecodeError("function and code section have inconsistent lengths")
 
     return module
