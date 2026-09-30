@@ -26,6 +26,7 @@ the compiled code objects can be shared by every instance of a module.
 
 from __future__ import annotations
 
+import bisect
 import linecache
 import math
 import struct
@@ -192,33 +193,64 @@ class Chain:
     `while True:` around a binary search on a segment variable, with a last
     "exit" leaf that leaves the loop. This is how C switch statements
     compile, and it keeps them from nesting deeper than Python allows.
+
+    The search tree is weighted (by how often each leaf is expected to be
+    entered) so that the busiest segments take the fewest tests, but it is
+    never more than two levels deeper than a balanced tree.
     """
 
-    __slots__ = ("id", "var", "n", "leaf", "base", "cont_id", "cont_used", "holder")
+    __slots__ = (
+        "id",
+        "var",
+        "n",
+        "leaf",
+        "base",
+        "cont_id",
+        "cont_used",
+        "holder",
+        "paths",
+    )
 
-    def __init__(self, id: int, n: int) -> None:
+    def __init__(self, id: int, weights: list[int]) -> None:
         self.id = id
         self.var = f"s{id}"
-        self.n = n  # leaves: the segments plus the exit leaf
+        self.n = len(weights)  # leaves: the segments plus the exit leaf
         self.leaf = -1
         self.base = 0  # indentation inside the while loop
         self.cont_id = 0  # br_ value meaning "continue the chain loop"
         self.cont_used = False
         self.holder: Label | None = None  # the outermost block
+        self.paths: list = [None] * self.n
+        prefix = [0]
+        for w in weights:
+            prefix.append(prefix[-1] + w)
+        self._split(0, self.n, tree_depth(self.n), prefix, [])
+
+    def _split(self, lo: int, hi: int, budget: int, prefix: list, path: list):
+        if hi - lo == 1:
+            self.paths[lo] = path
+            return
+        # the split nearest half the weight, leaving each side few enough
+        # leaves for the remaining depth
+        half = 1 << (budget - 1)
+        first, last = max(lo + 1, hi - half), min(hi - 1, lo + half)
+        target = (prefix[lo] + prefix[hi]) / 2
+        m = bisect.bisect_left(prefix, target, first, last + 1)
+        candidates = [c for c in (m - 1, m) if first <= c <= last]
+        mid = min(
+            candidates, key=lambda c: (abs(prefix[c] - target), abs(2 * c - lo - hi))
+        )
+        self._split(lo, mid, budget - 1, prefix, path + [(mid, 0)])
+        self._split(mid, hi, budget - 1, prefix, path + [(mid, 1)])
 
     def path(self, i: int) -> list[tuple[int, int]]:
         """(mid, 0 for `if var < mid` / 1 for `else`) down to leaf i."""
-        lo, hi = 0, self.n
-        path = []
-        while hi - lo > 1:
-            mid = (lo + hi) // 2
-            if i < mid:
-                path.append((mid, 0))
-                hi = mid
-            else:
-                path.append((mid, 1))
-                lo = mid
-        return path
+        return self.paths[i]
+
+
+def tree_depth(n: int) -> int:
+    """Maximum depth of the dispatch tree of a chain with n leaves."""
+    return min(n - 1, (n - 1).bit_length() + 2)
 
 
 def _function_types(module: Any) -> list:
@@ -538,6 +570,23 @@ class Translator:
                 ip += 1
         return chains
 
+    def find_loop_chains(self) -> dict[int, int]:
+        """Loops with a chain directly in their body (loop ip -> chain start
+        ip). The loop and its first such chain share one Python loop, where
+        the loop's start is the first leaf of the chain's dispatch tree."""
+        found = {}
+        open_: list[tuple[str, int]] = []
+        for ip, ins in enumerate(self.func.body):
+            if ip in self.chains and open_:
+                kind, parent = open_[-1]
+                if kind == "loop" and parent not in found:
+                    found[parent] = ip
+            if ins.opcode in ("block", "loop", "if"):
+                open_.append((ins.opcode, ip))
+            elif ins.opcode == "end" and open_:
+                open_.pop()
+        return found
+
     def fits(self, targeted: set, chains: dict[int, int]) -> bool:
         """Whether structured code stays within CPython's nesting limits."""
         members = {}
@@ -551,7 +600,7 @@ class Translator:
             if name in ("block", "loop", "if"):
                 if ip in members:
                     start, k = members[ip]
-                    depth = (k + 1 - 1).bit_length()  # of the dispatch tree
+                    depth = tree_depth(k + 1)
                     cost = (1, 1 + depth) if ip == start else (0, 0)
                 else:
                     py = name == "loop" or ip in targeted
@@ -569,6 +618,8 @@ class Translator:
 
     def translate(self) -> str:
         targeted, self.structured, self.chains = self.prepass()
+        self.loop_chains = self.find_loop_chains() if self.chains else {}
+        self.merged: dict[int, Chain] = {}  # chain start -> chain of its loop
         chain_rest = set()
         for start, k in self.chains.items():
             chain_rest.update(range(start + 1, start + k))
@@ -596,6 +647,8 @@ class Translator:
                 handler(self, name, arg)
             elif ip in self.chains:
                 self.open_chain(ip, self.chains[ip])
+            elif ip in self.loop_chains:
+                self.open_loop_chain(arg, self.loop_chains[ip])
             elif name in ("block", "loop", "if"):
                 self.open(name, arg, ip in targeted)
             elif name == "end":
@@ -1117,12 +1170,59 @@ class Translator:
         self.cur_pc = pc
         self.dead = False
 
-    def open_chain(self, start: int, k: int) -> None:
-        self.settle()
+    def chain_weights(self, start: int, k: int, merged: bool) -> list[int]:
+        """How often each leaf of a chain's dispatch tree is likely to be
+        entered, estimated from the number of branches to it (plus one for
+        falling into a segment). The first segment is entered every time."""
+        body = self.func.body
+        weights = [0] * (k + 1)
+        member = k - 1  # the innermost open block of the chain
+        depth = 0  # constructs open inside the current segment
+
+        def targets(d: int) -> int:
+            # the leaf of a branch to the block at depth d, or 0 (none)
+            rel = d - depth
+            return k - (member - rel) if 0 <= rel <= member else 0
+
+        ip = start + k
+        while member >= 0:
+            ins = body[ip]
+            name = ins.opcode
+            if name in ("block", "loop", "if"):
+                depth += 1
+            elif name == "end":
+                if depth:
+                    depth -= 1
+                else:
+                    if member or merged:
+                        weights[k - member] += 1  # falling through
+                    member -= 1
+            elif name in ("br", "br_if"):
+                leaf = targets(ins.operand)
+                if leaf < k or merged:  # else a plain break out of the chain
+                    weights[leaf] += 1
+            elif name == "br_table":
+                depths, default = ins.operand
+                for leaf in set(map(targets, set(depths) | {default})):
+                    weights[leaf] += 1
+            ip += 1
+        weights[0] = sum(weights) + 1
+        return weights
+
+    def new_chain(self, start: int, merged: bool) -> Chain:
         self.nlabel += 1
-        chain = Chain(self.nlabel, k + 1)
+        weights = self.chain_weights(start, self.chains[start], merged)
+        chain = Chain(self.nlabel, weights)
         self.nlabel += 1
         chain.cont_id = self.nlabel
+        return chain
+
+    def open_chain(self, start: int, k: int) -> None:
+        self.settle()
+        chain = self.merged.get(start)
+        merged = chain is not None
+        if chain is None:
+            chain = self.new_chain(start, False)
         height = len(self.stack)
         labels = []
         for j in range(k):  # outermost first
@@ -1131,16 +1231,39 @@ class Translator:
             label = Label("block", self.nlabel, (), results, height)
             label.vars = [f"r{label.id}_{i}" for i in range(len(results))]
             label.chain = chain
-            label.seg = None if j == 0 else k - j
+            # the end of the outermost block is the exit leaf; when the
+            # chain shares its loop, the code after it goes there
+            label.seg = k - j if j or merged else None
             labels.append(label)
+        self.labels.extend(labels)
+        if merged:
+            return
         labels[0].pyloop = True
         chain.holder = labels[0]
         self.emit(f"{chain.var} = 0")
         self.emit("while True:")
         self.indent += 1
         chain.base = self.indent
-        self.labels.extend(labels)
         self.enter_leaf(chain, 0)
+
+    def open_loop_chain(self, blocktype: Any, start: int) -> None:
+        """A loop that shares its Python loop with a chain in its body."""
+        self.settle()
+        label = self.new_label("loop", blocktype)
+        label.targeted = True
+        self.loop_params(label)
+        chain = self.merged[start] = self.new_chain(start, True)
+        label.chain = chain
+        label.seg = 0
+        label.pyloop = True
+        chain.holder = label
+        self.emit(f"{chain.var} = 0")
+        self.emit("while True:")
+        self.indent += 1
+        chain.base = self.indent
+        self.labels.append(label)
+        self.enter_leaf(chain, 0)
+        self.tick()
 
     def enter_leaf(self, chain: Chain, i: int) -> None:
         """Emit the if/else lines leading to leaf i of the dispatch tree."""
@@ -1205,14 +1328,7 @@ class Translator:
         label.targeted = targeted
         n_results = len(label.result_types)
         if name == "loop":
-            if label.param_types:
-                label.params = [
-                    f"p{label.id}_{k}" for k in range(len(label.param_types))
-                ]
-                values = self.popn(len(label.param_types))
-                self.emit_lines(self.assign(label.params, values))
-                for p, type in zip(label.params, label.param_types):
-                    self.stack.append(V(p, type, simple=True, stable=True))
+            self.loop_params(label)
             if self.structured:
                 label.pyloop = True
                 self.emit("while True:")
@@ -1248,6 +1364,15 @@ class Translator:
                 self.emit("    continue")
         self.labels.append(label)
 
+    def loop_params(self, label: Label) -> None:
+        """Loop parameters live in variables (branches to the loop set them)."""
+        if label.param_types:
+            label.params = [f"p{label.id}_{k}" for k in range(len(label.param_types))]
+            values = self.popn(len(label.param_types))
+            self.emit_lines(self.assign(label.params, values))
+            for p, type in zip(label.params, label.param_types):
+                self.stack.append(V(p, type, simple=True, stable=True))
+
     def results_of(self, label: Label) -> list[V]:
         n = len(label.result_types)
         return self.stack[len(self.stack) - n :] if n else []
@@ -1278,7 +1403,7 @@ class Translator:
     def close(self) -> bool:
         """Handle `end`. Returns True at the end of the function."""
         label = self.labels.pop()
-        if label.chain is not None:
+        if label.chain is not None and label.kind == "block":
             self.close_chain_block(label)
             return False
         fall = not self.dead
@@ -1291,7 +1416,10 @@ class Translator:
             if self.structured:
                 if fall:
                     self.emit("break")
-                self.indent -= 1
+                if label.chain is not None:
+                    self.indent = label.chain.base - 1
+                else:
+                    self.indent -= 1
                 if label.crossed:
                     self.flag_check()
             self.dead = not fall

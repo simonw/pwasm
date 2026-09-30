@@ -130,6 +130,37 @@ def test_block_chains(monkeypatch, force):
     assert ("s1 = " in python_source(inst.functions[0])) == force
 
 
+def test_chain_dispatch_trees_favour_heavy_segments():
+    from pwasm.codegen import Chain
+
+    weights = [100, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 60, 1]
+    chain = Chain(1, weights)
+    n = len(weights)
+    depths = [len(chain.path(i)) for i in range(n)]
+    assert depths[0] == 1
+    assert depths[16] <= 3
+    # never much deeper than a balanced tree
+    assert max(depths) <= (n - 1).bit_length() + 2
+    # each path of tests narrows down to its leaf
+    for i in range(n):
+        lo, hi = 0, n
+        for mid, side in chain.path(i):
+            assert lo < mid < hi
+            lo, hi = (lo, mid) if side == 0 else (mid, hi)
+        assert (lo, hi) == (i, i + 1)
+
+
+def test_chains_test_for_the_first_segment_first():
+    inst = load(switch_module(40))
+    inst.exports.f(1)
+    lines = python_source(inst.functions[0]).splitlines()
+    start = lines.index("        s1 = 0")
+    assert lines[start + 1 : start + 3] == [
+        "        while True:",
+        "            if s1 < 1:",
+    ]
+
+
 TYPED_CHAIN = """(module (func (export "f") (param i32) (result i32) (local i32)
   (block $b1
     (block $b2 (result i32)
@@ -181,6 +212,50 @@ def test_br_table_into_a_chain_and_out_of_it(monkeypatch, force):
     results = [inst.exports.f(i) for i in range(-1, 7)]
     assert results == [1001, 1001, 1111, 1101, 1, 2, 1001, 1001]
     assert ("s3 = (" in python_source(inst.functions[0])) == force
+
+
+INTERPRETER_LOOP = """(module (func (export "f") (param i32) (result i32) (local i32 i32)
+  (loop $main
+    (local.set 1 (i32.add (local.get 1) (i32.const 1)))
+    (block $done
+      (block $c2
+        (block $c1
+          (block $c0
+            (br_table $c0 $c1 $c2 $done (i32.rem_u (local.get 1) (i32.const 4))))
+          ;; case 0: go round again
+          (local.set 2 (i32.add (local.get 2) (i32.const 1)))
+          (br $main))
+        ;; case 1: falls into case 2
+        (local.set 2 (i32.add (local.get 2) (i32.const 10)))
+        SPIN)
+      ;; case 2
+      (local.set 2 (i32.add (local.get 2) (i32.const 100)))
+      (br_if $main (i32.lt_u (local.get 1) (local.get 0))))
+    (local.set 2 (i32.add (local.get 2) (i32.const 1000)))
+    (br_if $main (i32.lt_u (local.get 1) (local.get 0))))
+  (local.get 2)))"""
+
+# an inner loop in case 1 that sometimes branches straight back to $main
+SPIN = """(loop $spin
+          (local.set 2 (i32.add (local.get 2) (i32.const 10)))
+          (br_if $main (i32.eq (i32.and (local.get 2) (i32.const 7)) (i32.const 3)))
+          (br_if $spin (i32.lt_u (i32.and (local.get 2) (i32.const 0xF0)) (i32.const 0x40))))"""
+
+
+@pytest.mark.parametrize("force", [False, True])
+@pytest.mark.parametrize("spin", [False, True])
+def test_loops_around_chains(monkeypatch, force, spin):
+    import pwasm.codegen
+
+    text = INTERPRETER_LOOP.replace("SPIN", SPIN if spin else "")
+    expected = [load(text, mode="interpret").exports.f(n) for n in range(12)]
+    monkeypatch.setattr(pwasm.codegen, "FORCE_CHAINS", force)
+    inst = load(text)
+    assert [inst.exports.f(n) for n in range(12)] == expected
+    if not spin:
+        # the loop and the chain share one Python loop: going round the
+        # loop is just another jump in the chain
+        assert ("br_" in python_source(inst.functions[0])) == (not force)
 
 
 def test_deeply_nested_loops_use_a_state_machine():
