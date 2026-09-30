@@ -20,7 +20,7 @@ from __future__ import annotations
 from typing import Any
 
 from .errors import LinkError, TrapError
-from .executor import execute, invoke
+from .executor import execute
 from .runtime import HostFunction
 
 
@@ -102,15 +102,17 @@ class EmscriptenSjLj:
                 saved = stack_pointer._value
             else:
                 saved = execute(self._stack_save, [])
+            table = self._table
+            func = table[index] if index < len(table) else None
+            if func is None:
+                raise TrapError(f"uninitialized element {index}")
             self.depth += 1
             try:
                 if self.depth > self.max_depth and self._overflow is not None:
                     self.overflows += 1
                     execute(self._overflow, [])
                     return 0 if has_result else None
-                if index >= len(self._table) or self._table[index] is None:
-                    raise TrapError(f"uninitialized element {index}")
-                return invoke(self._table[index], list(args))
+                return func.entry(*args)
             except LongjmpUnwind:
                 if stack_pointer is not None:
                     stack_pointer._value = saved
