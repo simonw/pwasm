@@ -118,12 +118,12 @@
 ## Milestone 9: Tables and Indirect Calls
 *Goal: Function pointers via tables*
 
-- [ ] Implement TableInstance (parsing works, runtime not implemented)
-- [ ] Initialize tables from element segments (parsing works, runtime not implemented)
-- [ ] Execute `call_indirect`
-- [ ] Validate indirect call type signatures
-- [ ] Execute `table.get`, `table.set` (if targeting reference types)
-- [ ] Execute `table.size`, `table.grow` (if targeting reference types)
+- [x] Implement TableInstance
+- [x] Initialize tables from element segments
+- [x] Execute `call_indirect`
+- [x] Validate indirect call type signatures
+- [x] Execute `table.get`, `table.set` (if targeting reference types)
+- [x] Execute `table.size`, `table.grow` (if targeting reference types)
 
 ## Milestone 10: Imports and Exports
 *Goal: Module linking and Python interop*
@@ -182,26 +182,26 @@
 - [x] Pass `int_exprs.wast`
 
 **Control Flow Tests:**
-- [ ] Pass `block.wast`
-- [ ] Pass `loop.wast`
-- [ ] Pass `if.wast`
-- [ ] Pass `br.wast`
-- [ ] Pass `br_if.wast`
-- [ ] Pass `br_table.wast`
-- [ ] Pass `return.wast`
-- [ ] Pass `unreachable.wast`
-- [ ] Pass `nop.wast`
+- [x] Pass `block.wast`
+- [x] Pass `loop.wast`
+- [x] Pass `if.wast`
+- [x] Pass `br.wast`
+- [x] Pass `br_if.wast`
+- [x] Pass `br_table.wast`
+- [x] Pass `return.wast`
+- [x] Pass `unreachable.wast`
+- [x] Pass `nop.wast`
 
 **Function Tests:**
-- [ ] Pass `func.wast`
-- [ ] Pass `call.wast`
-- [ ] Pass `call_indirect.wast`
+- [x] Pass `func.wast`
+- [x] Pass `call.wast`
+- [x] Pass `call_indirect.wast`
 - [x] Pass `fac.wast` (factorial)
 
 **Variable Tests:**
 - [x] Pass `local_get.wast`
 - [x] Pass `local_set.wast`
-- [ ] Pass `local_tee.wast`
+- [x] Pass `local_tee.wast`
 - [ ] Pass `global.wast`
 
 **Memory Tests:**
@@ -211,14 +211,14 @@
 - [x] Pass `memory_trap.wast`
 - [x] Pass `address.wast`
 - [x] Pass `align.wast`
-- [ ] Pass `load.wast`
+- [x] Pass `load.wast`
 - [x] Pass `store.wast`
 - [x] Pass `endianness.wast`
 
 **Table Tests:**
 - [ ] Pass `table.wast`
 - [ ] Pass `elem.wast`
-- [ ] Pass `func_ptrs.wast`
+- [x] Pass `func_ptrs.wast`
 
 **Float Tests:**
 - [x] Pass `f32.wast`
@@ -240,11 +240,11 @@
 - [ ] Pass `data.wast`
 - [x] Pass `start.wast`
 - [ ] Pass `binary.wast`
-- [ ] Pass `binary-leb128.wast`
+- [x] Pass `binary-leb128.wast`
 - [ ] Pass `custom.wast`
 
 **Miscellaneous Tests:**
-- [ ] Pass `select.wast`
+- [x] Pass `select.wast`
 - [x] Pass `stack.wast`
 - [x] Pass `traps.wast`
 - [x] Pass `unwind.wast`
@@ -255,7 +255,7 @@
 - [ ] Pass `token.wast`
 - [ ] Pass `const.wast`
 - [x] Pass `switch.wast`
-- [ ] Pass `left-to-right.wast`
+- [x] Pass `left-to-right.wast`
 - [ ] Pass `linking.wast`
 
 ## Current Focus: Milestones 5-7

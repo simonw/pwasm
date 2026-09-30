@@ -180,7 +180,9 @@ class Element:
 
     table_idx: int
     offset: list[Instruction]
-    init: list[int]  # Function indices
+    init: list  # function indices, or constant expressions
+    mode: str = "active"  # "active", "passive" or "declarative"
+    elem_type: ValType = "funcref"
 
 
 @dataclass

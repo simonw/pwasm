@@ -307,7 +307,13 @@ def decode_func_type(reader: BinaryReader) -> FuncType:
     result_count = decode_unsigned_leb128(reader)
     results = tuple(decode_valtype(reader) for _ in range(result_count))
 
-    return FuncType(params, results)
+    # Intern types so that equal signatures are usually the same object,
+    # which makes call_indirect's signature check an identity test
+    func_type = FuncType(params, results)
+    return _FUNC_TYPES.setdefault(func_type, func_type)
+
+
+_FUNC_TYPES: dict[FuncType, FuncType] = {}
 
 
 def decode_type_section(reader: BinaryReader, module: Module) -> None:
@@ -398,21 +404,34 @@ def decode_start_section(reader: BinaryReader, module: Module) -> None:
 
 
 def decode_element_section(reader: BinaryReader, module: Module) -> None:
-    """Decode the element section."""
+    """Decode the element section (all eight segment encodings)."""
     count = decode_unsigned_leb128(reader)
     for _ in range(count):
-        # Simple active element segment (MVP)
         flags = decode_unsigned_leb128(reader)
-
-        if flags == 0:
-            # Active segment for table 0
-            offset = decode_expr(reader)
-            func_count = decode_unsigned_leb128(reader)
-            func_indices = [decode_unsigned_leb128(reader) for _ in range(func_count)]
-            module.elem.append(Element(0, offset, func_indices))
-        else:
-            # More complex element segment types (post-MVP)
+        if flags > 7:
             raise DecodeError(f"Unsupported element segment flags: {flags}")
+        uses_exprs = flags & 4
+        table_idx = 0
+        offset: list[Instruction] = []
+        if flags & 1:
+            mode = "declarative" if flags & 2 else "passive"
+        else:
+            mode = "active"
+            if flags & 2:
+                table_idx = decode_unsigned_leb128(reader)
+            offset = decode_expr(reader)
+        elem_type = "funcref"
+        if flags & 3:
+            if uses_exprs:
+                elem_type = decode_valtype(reader)
+            elif reader.read_byte() != 0x00:
+                raise DecodeError("Unsupported element kind")
+        n = decode_unsigned_leb128(reader)
+        if uses_exprs:
+            init: list = [decode_expr(reader) for _ in range(n)]
+        else:
+            init = [decode_unsigned_leb128(reader) for _ in range(n)]
+        module.elem.append(Element(table_idx, offset, init, mode, elem_type))
 
 
 def decode_code_section(reader: BinaryReader, module: Module) -> None:

@@ -18,7 +18,7 @@ import struct
 from typing import Any
 
 from . import numeric as num
-from .errors import WasmError
+from .errors import TrapError, WasmError
 from .numeric import MASK_32, MASK_64
 from .runtime import ZERO, HostFunction
 
@@ -85,7 +85,9 @@ from .runtime import ZERO, HostFunction
     UNOP,
     UNREACHABLE,
     RETURN_IF,
-) = range(54)
+    CALL_INDIRECT,
+    MISC,
+) = range(56)
 
 # Opcodes whose failures (struct.error / IndexError) mean an out of bounds
 # memory access rather than a bug.
@@ -295,6 +297,63 @@ STORES: dict[str, tuple[int, Any]] = {
     "i64.store": (STORE_RAW, lambda off: (_packer("<Q"), off)),
     "f32.store": (STORE_F32, lambda off: off),
     "f64.store": (STORE_RAW, lambda off: (_packer("<d"), off)),
+}
+
+
+def _ref_is_null(v: Any) -> int:
+    return 1 if v is None else 0
+
+
+def _misc(name: str, arg: Any, instance: Any) -> tuple[Any, int, int]:
+    """(function, values popped, values pushed) for rarely used instructions
+    that the executor runs through its generic MISC opcode."""
+    if name.startswith("table.") or name == "elem.drop":
+        if name == "table.copy":
+            dst = instance.tables[arg[0]]
+            src = instance.tables[arg[1]]
+
+            def table_copy(d: int, s: int, n: int) -> None:
+                if s + n > len(src.elements) or d + n > len(dst.elements):
+                    raise TrapError("out of bounds table access")
+                dst.elements[d : d + n] = src.elements[s : s + n]
+
+            return table_copy, 3, 0
+        if name == "table.init":
+            seg, table = arg[0], instance.tables[arg[1]]
+
+            def table_init(d: int, s: int, n: int) -> None:
+                table.init(d, instance.elements[seg], s, n)
+
+            return table_init, 3, 0
+        if name == "elem.drop":
+
+            def elem_drop() -> None:
+                instance.elements[arg] = []
+
+            return elem_drop, 0, 0
+        table = instance.tables[arg]
+        if name == "table.get":
+            return table.get, 1, 1
+        if name == "table.set":
+            return table.set, 2, 0
+        if name == "table.size":
+            return (lambda: len(table.elements)), 0, 1
+        if name == "table.grow":
+            return (lambda init, n: table.grow(n, init) & MASK_32), 2, 1
+        if name == "table.fill":
+            return table.fill, 3, 0
+    raise WasmError(f"Unsupported instruction: {name}")
+
+
+MISC_INSTRUCTIONS = {
+    "table.get",
+    "table.set",
+    "table.size",
+    "table.grow",
+    "table.fill",
+    "table.copy",
+    "table.init",
+    "elem.drop",
 }
 
 
@@ -528,6 +587,22 @@ def compile_function(wfunc: Any) -> Code:
         elif name == "unreachable":
             emit(UNREACHABLE)
             dead = True
+        elif name == "call_indirect":
+            ftype = types[arg[0]]
+            emit(CALL_INDIRECT, (instance.tables[arg[1]], ftype))
+            height += len(ftype.results) - len(ftype.params) - 1
+        elif name == "ref.null":
+            emit(CONST, None)
+            height += 1
+        elif name == "ref.func":
+            emit(CONST, instance.functions[arg])
+            height += 1
+        elif name == "ref.is_null":
+            emit(UNOP, _ref_is_null)
+        elif name in MISC_INSTRUCTIONS:
+            misc = _misc(name, arg, instance)
+            emit(MISC, misc)
+            height += misc[2] - misc[1]
         elif name == "memory.size":
             emit(MEMORY_SIZE)
             height += 1

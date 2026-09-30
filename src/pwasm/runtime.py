@@ -114,6 +114,54 @@ class MemoryInstance:
         self.data[ptr : ptr + len(data)] = data
 
 
+MAX_TABLE_SIZE = 10_000_000  # implementation limit on table.grow
+
+
+class TableInstance:
+    """A table of references (functions, or host values for externref)."""
+
+    def __init__(
+        self, element_type: str, min_size: int, max_size: int | None = None
+    ) -> None:
+        self.element_type = element_type
+        self.elements: list = [None] * min_size
+        self.max_size = max_size
+
+    @property
+    def size(self) -> int:
+        return len(self.elements)
+
+    def grow(self, delta: int, init: Any = None) -> int:
+        """Grow by delta elements. Returns the old size, or -1."""
+        old = len(self.elements)
+        limit = MAX_TABLE_SIZE if self.max_size is None else self.max_size
+        if old + delta > min(limit, MAX_TABLE_SIZE):
+            return -1
+        self.elements.extend([init] * delta)
+        return old
+
+    def get(self, index: int) -> Any:
+        if not 0 <= index < len(self.elements):
+            raise TrapError("out of bounds table access")
+        return self.elements[index]
+
+    def set(self, index: int, value: Any) -> None:
+        if not 0 <= index < len(self.elements):
+            raise TrapError("out of bounds table access")
+        self.elements[index] = value
+
+    def fill(self, index: int, value: Any, n: int) -> None:
+        if index + n > len(self.elements):
+            raise TrapError("out of bounds table access")
+        self.elements[index : index + n] = [value] * n
+
+    def init(self, dest: int, refs: list, src: int, n: int) -> None:
+        """table.init: copy n references from refs[src:] to dest."""
+        if src + n > len(refs) or dest + n > len(self.elements):
+            raise TrapError("out of bounds table access")
+        self.elements[dest : dest + n] = refs[src : src + n]
+
+
 class GlobalInstance:
     """A global variable. `value` converts to and from Python values."""
 

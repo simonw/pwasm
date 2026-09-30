@@ -19,7 +19,9 @@ from .compiler import (
     CALL,
     CALL0,
     CALL_HOST,
+    CALL_INDIRECT,
     CALLN,
+    MISC,
     CONST,
     DROP,
     GLOBAL_GET,
@@ -76,6 +78,7 @@ from .runtime import (
     GlobalInstance,
     HostFunction,
     MemoryInstance,
+    TableInstance,
     WasmFunction,
 )
 from .types import Module, Instruction
@@ -332,6 +335,42 @@ def execute(func: WasmFunction, args: list) -> Any:
                     if n == 0:
                         return None
                     return stack[-n:]
+            elif op == CALL_INDIRECT:
+                table, ftype = imms[ip - 1]
+                i = pop()
+                elements = table.elements
+                if i >= len(elements):
+                    raise TrapError("undefined element")
+                f = elements[i]
+                if f is None:
+                    raise TrapError("uninitialized element")
+                if f.type is not ftype and f.type != ftype:
+                    raise TrapError("indirect call type mismatch")
+                n = f.n_params
+                if n:
+                    a = stack[-n:]
+                    del stack[-n:]
+                else:
+                    a = []
+                if type(f) is WasmFunction:
+                    r = execute(f, a)
+                else:
+                    r = f.call(a)
+                n = f.n_results
+                if n == 1:
+                    push(r)
+                elif n:
+                    stack.extend(r)
+            elif op == MISC:
+                fn, n_in, n_out = imms[ip - 1]
+                if n_in:
+                    a = stack[-n_in:]
+                    del stack[-n_in:]
+                    r = fn(*a)
+                else:
+                    r = fn()
+                if n_out:
+                    push(r)
             else:
                 raise TrapError(f"Unknown internal opcode {op}")
     except (struct.error, IndexError):
@@ -424,7 +463,11 @@ class Instance:
         self.module = module
         self.functions: list[WasmFunction | HostFunction] = []
         self.memories: list[MemoryInstance] = []
+        self.tables: list[TableInstance] = []
         self.globals: list[GlobalInstance] = []
+        # Element and data segments; dropped segments become empty
+        self.elements: list[list] = []
+        self.datas: list[bytes] = []
         self.exports = ExportNamespace(self)
 
     @property
@@ -446,6 +489,10 @@ def _eval_const(instance: Instance, expr: list[Instruction]) -> Any:
             stack.append(instr.operand)
         elif name == "global.get":
             stack.append(instance.globals[instr.operand]._value)
+        elif name == "ref.null":
+            stack.append(None)
+        elif name == "ref.func":
+            stack.append(instance.functions[instr.operand])
         elif name == "end":
             break
         else:
@@ -508,6 +555,11 @@ def instantiate(
             )
         )
 
+    for table in module.tables:
+        instance.tables.append(
+            TableInstance(table.element_type, table.limits.min, table.limits.max)
+        )
+
     for mem in module.mems:
         instance.memories.append(MemoryInstance(mem.limits.min, mem.limits.max))
 
@@ -524,13 +576,40 @@ def instantiate(
             instance.exports._add(export.name, instance.memories[export.index])
         elif export.kind == "global":
             instance.exports._add(export.name, instance.globals[export.index])
+        elif export.kind == "table":
+            instance.exports._add(export.name, instance.tables[export.index])
 
-    for seg in module.data:
+    functions = instance.functions
+    for seg in module.elem:
+        instance.elements.append(
+            [
+                (
+                    functions[item]
+                    if isinstance(item, int)
+                    else _eval_const(instance, item)
+                )
+                for item in seg.init
+            ]
+        )
+    instance.datas = [seg.init for seg in module.data]
+
+    # Active segments are copied in order, then dropped. A trap leaves the
+    # effects of earlier segments in place.
+    for i, seg in enumerate(module.elem):
+        if seg.mode == "active":
+            refs = instance.elements[i]
+            offset = _eval_const(instance, seg.offset)
+            instance.tables[seg.table_idx].init(offset, refs, 0, len(refs))
+        if seg.mode != "passive":
+            instance.elements[i] = []
+
+    for i, seg in enumerate(module.data):
         if seg.memory_idx < 0:
             continue  # passive segment
         memory = instance.memories[seg.memory_idx]
         offset = _eval_const(instance, seg.offset)
         memory.write(offset, seg.init)
+        instance.datas[i] = b""
 
     if module.start is not None:
         invoke(instance.functions[module.start], [])
