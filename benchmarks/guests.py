@@ -1,12 +1,27 @@
 """Time the bundled guest interpreters running typical small workloads.
 
 uv run python benchmarks/guests.py
+
+Start-up is timed in new processes, with an empty on-disk code cache
+("cold") and then with the cache that run filled ("warm"). Workloads are
+timed on their first run (which includes compiling the functions they
+use) and at their best over three more runs.
 """
 
+import os
+import subprocess
 import sys
+import tempfile
 import time
 
+import pwasm.codegen
 from pwasm.guests import MicroPython, MQuickJS, QuickJS
+
+GUESTS = {
+    "MicroPython": (MicroPython, "exec"),
+    "QuickJS (quickjs-ng)": (QuickJS, "eval"),
+    "Micro QuickJS": (MQuickJS, "eval"),
+}
 
 PYTHON = [
     ("print(1 + 1)", "print(1 + 1)"),
@@ -35,26 +50,69 @@ JAVASCRIPT = [
     ("1,000 iteration loop", "var t = 0; for (var i = 0; i < 1000; i++) t += i; t"),
 ]
 
+WORKLOADS = {
+    "MicroPython": PYTHON,
+    "QuickJS (quickjs-ng)": JAVASCRIPT,
+    "Micro QuickJS": JAVASCRIPT,
+}
 
-def timed(fn):
-    start = time.perf_counter()
-    result = fn()
-    return time.perf_counter() - start, result
+# run in a new process: start a guest and evaluate its first workload
+START = """
+import sys, time
+sys.path.insert(0, {here!r})
+from guests import GUESTS, WORKLOADS
+cls, method = GUESTS[{name!r}]
+start = time.perf_counter()
+guest = cls()
+started = time.perf_counter()
+getattr(guest, method)(WORKLOADS[{name!r}][0][1])
+print(started - start, time.perf_counter() - started)
+"""
 
 
-def report(name, make, run, workloads):
-    elapsed, guest = timed(make)
-    print(f"{name}")
-    print(f"  {'startup':24s} {elapsed * 1000:8.0f} ms")
-    for label, code in workloads:
-        elapsed, result = timed(lambda: run(guest, code))
-        print(
-            f"  {label:24s} {elapsed * 1000:8.0f} ms   -> {str(result).strip()[:40]!r}"
-        )
+def start_up(name, cache_dir):
+    code = START.format(here=os.path.dirname(os.path.abspath(__file__)), name=name)
+    env = dict(os.environ, PWASM_CACHE_DIR=cache_dir)
+    out = subprocess.run(
+        [sys.executable, "-c", code], env=env, capture_output=True, text=True
+    )
+    if out.returncode:
+        raise RuntimeError(out.stderr)
+    return [float(x) for x in out.stdout.split()]
+
+
+def ms(seconds):
+    return f"{seconds * 1000:6.0f} ms"
+
+
+def report(name):
+    cls, method = GUESTS[name]
+    print(name)
+    with tempfile.TemporaryDirectory() as cache_dir:
+        for state in ("cold", "warm"):
+            startup, first = start_up(name, cache_dir)
+            print(
+                f"  {'start up + first eval (' + state + ')':34s} {ms(startup + first)}"
+            )
+    guest = cls()
+    run = getattr(guest, method)
+    for label, code in WORKLOADS[name]:
+        start = time.perf_counter()
+        result = run(code)
+        first = time.perf_counter() - start
+        best = first
+        for _ in range(3):
+            start = time.perf_counter()
+            run(code)
+            best = min(best, time.perf_counter() - start)
+        result = str(result).strip()[:30]
+        print(f"  {label:22s} first {ms(first)}, then {ms(best)}   -> {result!r}")
 
 
 if __name__ == "__main__":
+    # workloads here are timed without the disk cache, so that their first
+    # run always includes compiling
+    pwasm.codegen.CACHE_DIR = None
     print(f"Python {sys.version.split()[0]} ({sys.implementation.name})\n")
-    report("MicroPython", MicroPython, lambda g, c: g.exec(c), PYTHON)
-    report("QuickJS (quickjs-ng)", QuickJS, lambda g, c: g.eval(c), JAVASCRIPT)
-    report("Micro QuickJS", MQuickJS, lambda g, c: g.eval(c), JAVASCRIPT)
+    for name in GUESTS:
+        report(name)

@@ -232,12 +232,12 @@ Rough timings on CPython 3.11 (`benchmarks/guests.py`):
 
 | | MicroPython | QuickJS | Micro QuickJS |
 |---|---|---|---|
-| Start up | 11 ms | 530 ms | 27 ms |
-| Evaluate a small expression | 70 ms | 30 ms | 90 ms |
-| Recursive `fib(15)` | 670 ms | 310 ms | 280 ms |
-| 1,000 iteration loop | 380 ms | 210 ms | 120 ms |
+| Start up and evaluate `1 + 1`, first time | 160 ms | 1.3 s | 250 ms |
+| The same in a later process (compiled code cached on disk) | 55 ms | 135 ms | 70 ms |
+| Recursive `fib(15)` | 105 ms | 90 ms | 40 ms |
+| 1,000 iteration loop | 50 ms | 30 ms | 15 ms |
 
-The first call into a guest also pays to compile the functions it uses. pwasm runs well on [PyPy](https://pypy.org/), which is several times faster once warmed up.
+Guests compile their busiest functions to Python as they run (see [Compiling to Python](#compiling-to-python)), so the first run of new code also pays to compile what it uses. pwasm runs well on [PyPy](https://pypy.org/), which is several times faster once warmed up.
 
 ### Sandbox, WASI and setjmp/longjmp
 
@@ -326,7 +326,7 @@ print(python_source(instance.functions[0]))  # the generated Python
 
 Compiled code objects are cached on the module, so further instances of the same module reuse them.
 
-Compiled code is also cached on disk, so a new process does not have to generate and compile it again: QuickJS starts up and evaluates its first expression in about 0.1s instead of 1.3s, and MicroPython in 60ms instead of 150ms. The cache lives in `~/.cache/pwasm` (or `$XDG_CACHE_HOME/pwasm`), in a directory for each module (by its SHA-256), Python version and version of the code generator; each function's generated source is kept next to its code, for tracebacks. Set the `PWASM_CACHE_DIR` environment variable to use another directory, or to an empty string to turn the cache off (`pwasm.codegen.CACHE_DIR = None` does the same from Python).
+Compiled code is also cached on disk, so a new process does not have to generate and compile it again: QuickJS starts up and evaluates its first expression in about 0.1s instead of 1.3s, and MicroPython in 55ms instead of 160ms. The cache lives in `~/.cache/pwasm` (or `$XDG_CACHE_HOME/pwasm`), in a directory for each module (by its SHA-256), Python version and version of the code generator; each function's generated source is kept next to its code, for tracebacks. Set the `PWASM_CACHE_DIR` environment variable to use another directory, or to an empty string to turn the cache off (`pwasm.codegen.CACHE_DIR = None` does the same from Python).
 
 ## Development
 
