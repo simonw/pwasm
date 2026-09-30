@@ -336,6 +336,41 @@ def test_adding_constants_wraps_without_masking(t, bits, operation):
         assert " if l0 " in source
 
 
+OFFSET_SWITCH = """(module (func (export "f") (param i32) (result i32)
+  (block $d
+    (block $c2
+      (block $c1
+        (block $c0
+          (br_table $c0 $c1 $c2 $d (INDEX)))
+        (return (i32.const 100)))
+      (return (i32.const 101)))
+    (return (i32.const 102)))
+  (i32.const 999)))"""
+
+
+@pytest.mark.parametrize(
+    "index",
+    [
+        "local.get 0",
+        "i32.sub (local.get 0) (i32.const 3)",
+        "i32.add (local.get 0) (i32.const -3)",
+    ],
+)
+@pytest.mark.parametrize("force", [False, True])
+def test_br_table_indexes(monkeypatch, index, force):
+    import pwasm.codegen
+
+    monkeypatch.setattr(pwasm.codegen, "FORCE_CHAINS", force)
+    text = OFFSET_SWITCH.replace("INDEX", index)
+    expected = [load(text, mode="interpret").exports.f(n) for n in range(-2, 9)]
+    inst = load(text)
+    assert [inst.exports.f(n) for n in range(-2, 9)] == expected
+    source = python_source(inst.functions[0])
+    # the table absorbs the offset, and the local is used directly
+    assert "l0 - 3" not in source
+    assert "t1 = l0" not in source
+
+
 def test_deeply_nested_loops_use_a_state_machine():
     inst = load(nested_loops_module(25))
     assert inst.exports.f(10) == 10

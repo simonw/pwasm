@@ -1068,7 +1068,16 @@ class Translator:
 
     def i_br_table(self, name: str, arg: Any) -> None:
         depths, default = arg
-        index = self.to_temp(V(masked(self.pop()), "i32", simple=False)).expr
+        v = self.pop()
+        if v.wrap is not None and -256 <= v.wrap[1] < 0:
+            # a table indexed by x - k is a table indexed by x with k more
+            # entries (for x < k, x - k wraps around to a large index)
+            index = v.wrap[0]
+            depths = (default,) * -v.wrap[1] + tuple(depths)
+        elif v.masked and v.expr.isidentifier():
+            index = v.expr
+        else:
+            index = self.to_temp(V(masked(v), "i32", simple=False)).expr
         targets = [self.labels[-1 - d] for d in list(depths) + [default]]
         if not self.structured and all(
             t.kind != "func" and not t.branch_types for t in targets
