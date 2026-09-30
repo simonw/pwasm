@@ -105,3 +105,14 @@ def test_f32_arguments_are_rounded_to_single_precision():
 
     inst = load('(module (func (export "f") (param f32) (result f32) (local.get 0)))')
     assert inst.exports.f(1.1) == 1.100000023841858
+
+
+def test_sqrt_quiets_signalling_nans():
+    # PyPy's math.sqrt returns a signalling NaN unchanged; WebAssembly
+    # requires a quiet (arithmetic) NaN
+    from wat import load
+
+    inst = load("""(module (func (export "f") (param i64) (result i64)
+      (i64.reinterpret_f64 (f64.sqrt (f64.reinterpret_i64 (local.get 0))))))""")
+    result = inst.exports.f(0x7FF4000000000000)
+    assert result & 0x7FF8000000000000 == 0x7FF8000000000000

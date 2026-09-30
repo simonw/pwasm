@@ -321,6 +321,8 @@ def f64_div(a: float, b: float) -> float:
 
 
 def f64_sqrt(a: float) -> float:
+    if a != a:
+        return a + 0.0  # quiet a signalling NaN (PyPy's sqrt returns it as is)
     try:
         return math.sqrt(a)
     except ValueError:

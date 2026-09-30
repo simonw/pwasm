@@ -208,9 +208,9 @@ class Sandbox:
 
 
 def _raise_recursion_limit(limit: int) -> None:
-    # Python 3.10 still uses the C stack for Python-to-Python calls, so be
-    # more conservative there
-    if sys.version_info < (3, 11):
+    # Python 3.10 and PyPy use the C stack for Python-to-Python calls, and
+    # crash rather than raise RecursionError much beyond 8,000 frames
+    if sys.version_info < (3, 11) or sys.implementation.name != "cpython":
         limit = min(limit, 8000)
     if sys.getrecursionlimit() < limit:
         sys.setrecursionlimit(limit)
