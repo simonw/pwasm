@@ -161,14 +161,16 @@
 ## Milestone 13: WAST Test Runner
 *Goal: Run official spec tests*
 
-- [ ] Implement WAST S-expression parser
-- [ ] Handle `(module ...)` declarations
-- [ ] Handle `(assert_return ...)` tests
-- [ ] Handle `(assert_trap ...)` tests
-- [ ] Handle `(assert_invalid ...)` tests
-- [ ] Handle `(assert_malformed ...)` tests
-- [ ] Handle `(invoke ...)` commands
-- [ ] Handle `(register ...)` for module linking
+`tests/spec_runner.py` runs the vendored `wg-2.0` core tests in `tests/spec/`, compiling module text with `wasmtime.wat2wasm`.
+
+- [x] Implement WAST S-expression parser
+- [x] Handle `(module ...)` declarations
+- [x] Handle `(assert_return ...)` tests
+- [x] Handle `(assert_trap ...)` tests
+- [ ] Handle `(assert_invalid ...)` tests (skipped: no validator)
+- [ ] Handle `(assert_malformed ...)` tests (skipped)
+- [x] Handle `(invoke ...)` commands
+- [x] Handle `(register ...)` for module linking
 
 ## Milestone 14: Spec Test Compliance
 *Goal: Pass official test suite*
