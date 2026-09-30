@@ -9,9 +9,10 @@ boundary with Python code.
 
 from __future__ import annotations
 
+import time
 from typing import Any, Callable
 
-from .errors import TrapError
+from .errors import OutOfFuel, Timeout, TrapError
 from .numeric import F32NaN, f32_round
 from .types import FuncType, GlobalType, Function
 
@@ -84,6 +85,9 @@ class MemoryInstance:
     def __init__(self, min_pages: int, max_pages: int | None = None) -> None:
         self.data = bytearray(min_pages * PAGE_SIZE)
         self.max_pages = max_pages
+        # An embedder-imposed cap (see Limits.max_memory), separate from the
+        # maximum the module declared
+        self.limit_pages: int | None = None
 
     @property
     def size(self) -> int:
@@ -95,6 +99,8 @@ class MemoryInstance:
         old = len(self.data) // PAGE_SIZE
         new = old + delta
         limit = MAX_PAGES if self.max_pages is None else self.max_pages
+        if self.limit_pages is not None:
+            limit = min(limit, self.limit_pages)
         if new > limit:
             return -1
         if delta:
@@ -112,6 +118,89 @@ class MemoryInstance:
         if ptr < 0 or ptr + len(data) > len(self.data):
             raise TrapError("out of bounds memory access")
         self.data[ptr : ptr + len(data)] = data
+
+
+class Limits:
+    """Resource limits for an instance, passed to instantiate().
+
+    fuel: budget of work units (None for unlimited). One unit is charged
+        for every function call and every iteration of a loop, so the cost
+        of running the same code is deterministic.
+    max_memory: cap in bytes on the size of the instance's memories.
+
+    The deadline (a time.monotonic() value, see set_deadline) and the fuel
+    budget are checked every `check_interval` units.
+    """
+
+    __slots__ = (
+        "fuel",
+        "deadline",
+        "max_memory",
+        "check_interval",
+        "countdown",
+        "_granted",
+        "_consumed",
+    )
+
+    def __init__(
+        self,
+        fuel: int | None = None,
+        max_memory: int | None = None,
+        check_interval: int = 1000,
+    ) -> None:
+        self.fuel = fuel
+        self.deadline: float | None = None
+        self.max_memory = max_memory
+        self.check_interval = check_interval
+        self._consumed = 0
+        self._granted = 0
+        self.countdown = 0
+        self._grant()
+
+    @property
+    def fuel_consumed(self) -> int:
+        return self._consumed + self._granted - self.countdown
+
+    @property
+    def fuel_remaining(self) -> int | None:
+        if self.fuel is None:
+            return None
+        return self.fuel - self.fuel_consumed
+
+    def set_fuel(self, fuel: int | None) -> None:
+        """Set the total budget (fuel consumed so far still counts)."""
+        self._settle()
+        self.fuel = None if fuel is None else self.fuel_consumed + fuel
+        self._grant()
+
+    def set_deadline(self, deadline: float | None) -> None:
+        """Stop execution once time.monotonic() passes deadline."""
+        self._settle()
+        self.deadline = deadline
+        self._grant()
+
+    def _settle(self) -> None:
+        self._consumed += self._granted - self.countdown
+        self._granted = self.countdown = 0
+
+    def _grant(self) -> None:
+        grant = self.check_interval
+        if self.fuel is not None:
+            grant = max(0, min(grant, self.fuel - self._consumed))
+        self._granted = self.countdown = grant
+
+    def refill(self) -> None:
+        """Called by the executor when a unit is charged with the countdown
+        already at zero (it has gone to -1): check the limits, then grant
+        another slice and charge the unit to it."""
+        self.countdown += 1
+        self._settle()
+        if self.fuel is not None and self._consumed >= self.fuel:
+            raise OutOfFuel(f"fuel budget of {self.fuel} units exhausted")
+        if self.deadline is not None and time.monotonic() >= self.deadline:
+            raise Timeout("execution timed out")
+        self._grant()
+        self.countdown -= 1
 
 
 MAX_TABLE_SIZE = 10_000_000  # implementation limit on table.grow

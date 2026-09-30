@@ -87,7 +87,8 @@ from .runtime import ZERO, HostFunction
     RETURN_IF,
     CALL_INDIRECT,
     MISC,
-) = range(56)
+    TICK,
+) = range(57)
 
 # Opcodes whose failures (struct.error / IndexError) mean an out of bounds
 # memory access rather than a bug.
@@ -455,6 +456,11 @@ def compile_function(wfunc: Any) -> Code:
 
     labels = [_Label("func", 0, 0, wfunc.n_results, 0)]
     height = 0
+    # With resource limits, charge a unit of fuel per call and per loop
+    # iteration (at loop headers, so every backward branch pays)
+    limits = instance.limits
+    if limits is not None:
+        emit(TICK, limits)
     dead = False  # current code is unreachable (after br, return, ...)
     skip = 0  # nesting depth of blocks inside dead code
 
@@ -544,6 +550,8 @@ def compile_function(wfunc: Any) -> Code:
             labels.append(
                 _Label("loop", height - n_params, n_params, n_results, len(ops))
             )
+            if limits is not None:
+                emit(TICK, limits)
         elif name == "if":
             height -= 1
             n_params, n_results = block_signature(arg)

@@ -131,6 +131,28 @@ instance = instantiate(module, {
 
 Host functions can call back into the instance that called them, and a Python exception raised inside a host function unwinds any WebAssembly frames in between.
 
+### Resource Limits
+
+Pass a `Limits` object to `instantiate()` to cap the work and memory an instance can use - useful for running untrusted code:
+
+```python
+import time
+from pwasm import OutOfFuel, Timeout, instantiate
+from pwasm.runtime import Limits
+
+limits = Limits(fuel=10_000_000, max_memory=64 * 1024 * 1024)
+instance = instantiate(module, imports, limits=limits)
+
+limits.set_deadline(time.monotonic() + 2.0)  # wall-clock limit
+try:
+    instance.exports.run()
+except (OutOfFuel, Timeout) as e:
+    print("stopped:", e)
+print(limits.fuel_consumed)
+```
+
+One unit of fuel is charged for every function call and every loop iteration, so the fuel a given call uses is deterministic. `max_memory` caps how far `memory.grow` can grow each memory. Instances without limits pay no overhead for these checks. `OutOfFuel` and `Timeout` are subclasses of `TrapError`.
+
 ### Error Handling
 
 ```python

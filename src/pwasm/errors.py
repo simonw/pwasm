@@ -29,3 +29,15 @@ class LinkError(WasmError):
     """Error during module instantiation/linking."""
 
     pass
+
+
+class OutOfFuel(TrapError):
+    """Execution used up its fuel budget (see pwasm.runtime.Limits)."""
+
+    pass
+
+
+class Timeout(TrapError):
+    """Execution ran past its deadline (see pwasm.runtime.Limits)."""
+
+    pass

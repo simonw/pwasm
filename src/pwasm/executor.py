@@ -67,6 +67,7 @@ from .compiler import (
     RETURN,
     RETURN_IF,
     SELECT,
+    TICK,
     UNOP,
     UNREACHABLE,
 )
@@ -77,6 +78,7 @@ from .runtime import (
     TO_PYTHON,
     GlobalInstance,
     HostFunction,
+    Limits,
     MemoryInstance,
     TableInstance,
     WasmFunction,
@@ -371,6 +373,11 @@ def execute(func: WasmFunction, args: list) -> Any:
                     r = fn()
                 if n_out:
                     push(r)
+            elif op == TICK:
+                limits = imms[ip - 1]
+                limits.countdown -= 1
+                if limits.countdown < 0:
+                    limits.refill()
             else:
                 raise TrapError(f"Unknown internal opcode {op}")
     except (struct.error, IndexError):
@@ -473,6 +480,7 @@ class Instance:
         # Element and data segments; dropped segments become empty
         self.elements: list[list] = []
         self.datas: list[bytes] = []
+        self.limits: Limits | None = None
         self.exports = ExportNamespace(self)
 
     @property
@@ -571,19 +579,24 @@ def _import_global(value: Any, imp: Any) -> GlobalInstance:
 
 
 def instantiate(
-    module: Module, imports: dict[str, dict[str, Any]] | None = None
+    module: Module,
+    imports: dict[str, dict[str, Any]] | None = None,
+    *,
+    limits: Limits | None = None,
 ) -> Instance:
     """Create an instance from a module.
 
     Args:
         module: The decoded module to instantiate
         imports: Optional import object mapping module -> name -> value
+        limits: Optional resource limits (fuel, deadline, memory cap)
 
     Returns:
         An Instance ready for execution
     """
     imports = imports or {}
     instance = Instance(module)
+    instance.limits = limits
 
     # Imports come first in each index space
     for imp in module.imports:
@@ -615,7 +628,14 @@ def instantiate(
         )
 
     for mem in module.mems:
-        instance.memories.append(MemoryInstance(mem.limits.min, mem.limits.max))
+        memory = MemoryInstance(mem.limits.min, mem.limits.max)
+        if limits is not None and limits.max_memory is not None:
+            memory.limit_pages = limits.max_memory // MemoryInstance.PAGE_SIZE
+            if mem.limits.min > memory.limit_pages:
+                raise LinkError(
+                    f"initial memory of {mem.limits.min} pages exceeds max_memory"
+                )
+        instance.memories.append(memory)
 
     for glob in module.globals:
         instance.globals.append(
