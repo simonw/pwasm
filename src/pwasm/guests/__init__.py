@@ -19,8 +19,18 @@ def guest_path(name: str) -> Path:
     return Path(__file__).parent / name
 
 
+_modules: dict[tuple[str, float], Module] = {}
+
+
 def load_guest(name: str, wasm_path: str | os.PathLike | None = None) -> Module:
-    return decode_module(Path(wasm_path or guest_path(name)).read_bytes())
+    """Decode a guest module. Decoded modules are cached, so every instance
+    of a guest shares the Python code compiled for its functions."""
+    path = Path(wasm_path or guest_path(name)).resolve()
+    key = (str(path), path.stat().st_mtime)
+    module = _modules.get(key)
+    if module is None:
+        module = _modules[key] = decode_module(path.read_bytes())
+    return module
 
 
 from .micropython import MicroPython, PythonError  # noqa: E402

@@ -28,6 +28,7 @@ class MicroPython:
     max_memory: cap in bytes on the WebAssembly memory
     fuel / timeout: CPU limits (raise pwasm.OutOfFuel / pwasm.Timeout)
     functions: {"name": callable} available as host.call("name", ...)
+    mode: "interpret", "compile" or "auto" (see pwasm.executor.instantiate)
     max_depth: nesting depth of guest calls at which the guest raises
         RuntimeError: maximum recursion depth exceeded
     """
@@ -40,6 +41,7 @@ class MicroPython:
         max_memory: int = 64 * 1024 * 1024,
         fuel: int | None = None,
         timeout: float | None = None,
+        mode: str | None = None,
         functions: dict[str, Callable[..., Any]] | None = None,
         max_depth: int = 300,
     ) -> None:
@@ -63,6 +65,7 @@ class MicroPython:
             max_memory=max_memory,
             fuel=fuel,
             timeout=timeout,
+            mode=mode,
             initialize=False,
         )
         self.sjlj.bind(self.sb.instance)

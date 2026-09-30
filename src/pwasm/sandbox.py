@@ -43,6 +43,7 @@ class Sandbox:
     timeout: default wall-clock limit in seconds for each call().
     recursion_limit: Python's recursion limit is raised to at least this,
         since each WebAssembly call is a Python call.
+    mode: "interpret", "compile" or "auto" (see pwasm.executor.instantiate)
     """
 
     def __init__(
@@ -59,6 +60,7 @@ class Sandbox:
         env: Mapping[str, str] | None = None,
         initialize: bool = True,
         recursion_limit: int = 20_000,
+        mode: str | None = None,
     ) -> None:
         if isinstance(wasm, Module):
             module = wasm
@@ -94,7 +96,7 @@ class Sandbox:
         if missing:
             raise LinkError("unresolved imports: " + ", ".join(missing))
 
-        self.instance = instantiate(module, resolved, limits=self.limits)
+        self.instance = instantiate(module, resolved, limits=self.limits, mode=mode)
         self.exports = self.instance.exports
         if self.wasi is not None and self.instance.memories:
             self.wasi.bind(self.instance)

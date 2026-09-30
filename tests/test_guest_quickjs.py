@@ -96,3 +96,13 @@ def test_memory_limit():
         js.eval("let a = []; while (true) { a.push(new ArrayBuffer(1 << 20)) }")
     assert js.memory_size <= 8 << 20
     assert js.eval("a = null; 1 + 1") == 2
+
+
+def test_instances_share_the_decoded_module_and_compiled_code():
+    first = QuickJS(mode="compile")
+    second = QuickJS(mode="compile")
+    assert first.sb.module is second.sb.module
+    first.eval("1 + 1")
+    second.eval("1 + 1")
+    code_objects = first.sb.module._python_code
+    assert code_objects and all(code is not None for code in code_objects.values())

@@ -22,6 +22,7 @@ class MQuickJS:
 
     memory_limit: size in bytes of the JavaScript heap (fixed at startup)
     max_memory: cap in bytes on the WebAssembly memory
+    mode: "interpret", "compile" or "auto" (see pwasm.executor.instantiate)
     fuel / timeout: CPU limits (raise pwasm.OutOfFuel / pwasm.Timeout)
     """
 
@@ -33,6 +34,7 @@ class MQuickJS:
         max_memory: int = 64 * 1024 * 1024,
         fuel: int | None = None,
         timeout: float | None = None,
+        mode: str | None = None,
     ) -> None:
         module = load_guest("mquickjs.wasm", wasm_path)
         self.sjlj = EmscriptenSjLj()
@@ -52,6 +54,7 @@ class MQuickJS:
             max_memory=max_memory,
             fuel=fuel,
             timeout=timeout,
+            mode=mode,
             wasi=False,
             initialize=False,
         )

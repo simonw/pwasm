@@ -27,6 +27,7 @@ class QuickJS:
     js_memory_limit: QuickJS's own allocation limit in bytes (0 for none)
     stack_size: QuickJS stack limit, so deep recursion is a RangeError
     fuel / timeout: CPU limits (raise pwasm.OutOfFuel / pwasm.Timeout)
+    mode: "interpret", "compile" or "auto" (see pwasm.executor.instantiate)
     functions: {"name": callable} available in JavaScript as host.name()
     """
 
@@ -39,6 +40,7 @@ class QuickJS:
         stack_size: int = 512 * 1024,
         fuel: int | None = None,
         timeout: float | None = None,
+        mode: str | None = None,
         functions: dict[str, Callable[..., Any]] | None = None,
     ) -> None:
         self.functions: dict[str, Callable[..., Any]] = dict(functions or {})
@@ -60,6 +62,7 @@ class QuickJS:
             max_memory=max_memory,
             fuel=fuel,
             timeout=timeout,
+            mode=mode,
         )
         status = self.sb.call("qjs_init", js_memory_limit, stack_size)
         if status != 0:
