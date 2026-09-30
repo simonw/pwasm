@@ -54,8 +54,10 @@ MAX_INDENT = 80
 # Longer expressions are assigned to a temporary
 MAX_EXPR = 300
 
-# Set to True to translate every function as a state machine (for testing)
+# For testing: translate every function as a state machine, or lower every
+# chain of blocks (see Translator.open_chain) even when not needed
 FORCE_STATE_MACHINE = False
+FORCE_CHAINS = False
 
 _EMPTY: frozenset = frozenset()
 
@@ -147,6 +149,8 @@ class Label:
         "start_pc",
         "end_pc",
         "else_pc",
+        "chain",
+        "seg",
     )
 
     def __init__(
@@ -171,10 +175,50 @@ class Label:
         self.start_pc = 0
         self.end_pc: int | None = None
         self.else_pc = 0
+        self.chain: Chain | None = None  # set for the blocks of a chain
+        self.seg: int | None = None  # chain segment starting at our end
 
     @property
     def branch_types(self) -> tuple:
         return self.param_types if self.kind == "loop" else self.result_types
+
+
+class Chain:
+    """A chain of consecutive blocks translated as one Python loop.
+
+    `block block block ... end A end B end C` has code segments: the code
+    inside the innermost block (0), then after each `end` (1, 2, ...).
+    Branches only go forward, to a later segment, so the chain becomes
+    `while True:` around a binary search on a segment variable, with a last
+    "exit" leaf that leaves the loop. This is how C switch statements
+    compile, and it keeps them from nesting deeper than Python allows.
+    """
+
+    __slots__ = ("id", "var", "n", "leaf", "base", "cont_id", "cont_used", "holder")
+
+    def __init__(self, id: int, n: int) -> None:
+        self.id = id
+        self.var = f"s{id}"
+        self.n = n  # leaves: the segments plus the exit leaf
+        self.leaf = -1
+        self.base = 0  # indentation inside the while loop
+        self.cont_id = 0  # br_ value meaning "continue the chain loop"
+        self.cont_used = False
+        self.holder: Label | None = None  # the outermost block
+
+    def path(self, i: int) -> list[tuple[int, int]]:
+        """(mid, 0 for `if var < mid` / 1 for `else`) down to leaf i."""
+        lo, hi = 0, self.n
+        path = []
+        while hi - lo > 1:
+            mid = (lo + hi) // 2
+            if i < mid:
+                path.append((mid, 0))
+                hi = mid
+            else:
+                path.append((mid, 1))
+                lo = mid
+        return path
 
 
 def _function_types(module: Any) -> list:
@@ -442,9 +486,10 @@ class Translator:
         t = self.types[blocktype]
         return tuple(t.params), tuple(t.results)
 
-    def prepass(self) -> tuple[set, bool]:
-        """Which constructs are branch targets, and whether the function
-        fits in structured Python."""
+    def prepass(self) -> tuple[set, bool, dict]:
+        """Which constructs are branch targets, whether the function fits in
+        structured Python, and which chains of blocks to lower (start ip ->
+        number of blocks) to make it fit."""
         body = self.func.body
         open_: list[int] = []
         targeted: set = set()
@@ -463,27 +508,69 @@ class Translator:
                 for d in list(depths) + [default]:
                     if d < len(open_):
                         targeted.add(open_[-1 - d])
+        if FORCE_STATE_MACHINE:
+            return targeted, False, {}
+        if not FORCE_CHAINS and self.fits(targeted, {}):
+            return targeted, True, {}
+        chains = self.find_chains()
+        if self.fits(targeted, chains):
+            return targeted, True, chains
+        return targeted, False, {}
+
+    def find_chains(self) -> dict[int, int]:
+        body = self.func.body
+        chains = {}
+        ip = 0
+        while ip < len(body):
+            if body[ip].opcode == "block" and body[ip].operand == ():
+                end = ip
+                while (
+                    end < len(body)
+                    and body[end].opcode == "block"
+                    and body[end].operand == ()
+                ):
+                    end += 1
+                if end - ip >= 2:
+                    chains[ip] = end - ip
+                ip = end
+            else:
+                ip += 1
+        return chains
+
+    def fits(self, targeted: set, chains: dict[int, int]) -> bool:
+        """Whether structured code stays within CPython's nesting limits."""
+        members = {}
+        for start, k in chains.items():
+            for ip in range(start, start + k):
+                members[ip] = (start, k)
         nesting: list[tuple[int, int]] = []
         loops = indent = max_loops = max_indent = 0
-        for ip, ins in enumerate(body):
+        for ip, ins in enumerate(self.func.body):
             name = ins.opcode
             if name in ("block", "loop", "if"):
-                py = name == "loop" or ip in targeted
-                width = int(py) + (1 if name == "if" else 0)
-                nesting.append((int(py), width))
-                loops += int(py)
-                indent += width
+                if ip in members:
+                    start, k = members[ip]
+                    depth = (k + 1 - 1).bit_length()  # of the dispatch tree
+                    cost = (1, 1 + depth) if ip == start else (0, 0)
+                else:
+                    py = name == "loop" or ip in targeted
+                    cost = (int(py), int(py) + (1 if name == "if" else 0))
+                nesting.append(cost)
+                loops += cost[0]
+                indent += cost[1]
                 max_loops = max(max_loops, loops)
                 max_indent = max(max_indent, indent)
             elif name == "end" and nesting:
                 py, width = nesting.pop()
                 loops -= py
                 indent -= width
-        structured = max_loops <= MAX_PY_LOOPS and max_indent <= MAX_INDENT
-        return targeted, structured and not FORCE_STATE_MACHINE
+        return max_loops <= MAX_PY_LOOPS and max_indent <= MAX_INDENT
 
     def translate(self) -> str:
-        targeted, self.structured = self.prepass()
+        targeted, self.structured, self.chains = self.prepass()
+        chain_rest = set()
+        for start, k in self.chains.items():
+            chain_rest.update(range(start + 1, start + k))
         func_label = Label("func", 0, (), tuple(self.ftype.results), 0)
         self.labels.append(func_label)
         body = self.func.body
@@ -501,9 +588,13 @@ class Translator:
                     continue
                 if name not in ("end", "else"):
                     continue
+            if ip in chain_rest:
+                continue  # opened with the first block of its chain
             handler = self.HANDLERS.get(name)
             if handler is not None:
                 handler(self, name, arg)
+            elif ip in self.chains:
+                self.open_chain(self.chains[ip])
             elif name in ("block", "loop", "if"):
                 self.open(name, arg, ip in targeted)
             elif name == "end":
@@ -858,6 +949,9 @@ class Translator:
             self.emit("continue")
             self.dead = True
             return
+        if self.structured and self.chain_table(index, depths, targets):
+            self.dead = True
+            return
         groups: dict[int, list[int]] = {}
         for i, d in enumerate(depths):
             if d != default:
@@ -881,6 +975,42 @@ class Translator:
             self.emit_lines(self.branch(default))
             self.indent -= 1
         self.dead = True
+
+    def chain_table(self, index: str, depths: Any, targets: list) -> bool:
+        """br_table to the blocks of one chain: look the segment up in a
+        tuple. Returns False if the targets are not all in one chain."""
+        if len(depths) < 2:
+            return False
+        chain = targets[0].chain
+        if chain is None or any(t.chain is not chain for t in targets[:-1]):
+            return False
+        segs = []
+        for t in targets[:-1]:
+            if t.seg is None:
+                t.branched = True
+                segs.append(chain.n - 1)
+            else:
+                segs.append(t.seg)
+        table = "(" + ", ".join(map(str, segs)) + ",)"
+        default = targets[-1]
+        n = len(depths)
+        if default.chain is chain:
+            dseg = chain.n - 1 if default.seg is None else default.seg
+            if default.seg is None:
+                default.branched = True
+            self.emit(f"{chain.var} = {table}[{index}] if {index} < {n} else {dseg}")
+            self.emit_lines(self.chain_jump(chain))
+            return True
+        self.emit(f"if {index} < {n}:")
+        self.indent += 1
+        self.emit(f"{chain.var} = {table}[{index}]")
+        self.emit_lines(self.chain_jump(chain))
+        self.indent -= 1
+        self.emit("else:")
+        self.indent += 1
+        self.emit_lines(self.branch(len(self.labels) - 1 - self.labels.index(default)))
+        self.indent -= 1
+        return True
 
     # --- control flow ---
 
@@ -919,6 +1049,10 @@ class Translator:
         target = self.labels[position]
         if target.kind == "func":
             return [self.return_stmt()]
+        if target.chain is not None and target.seg is not None and self.structured:
+            return [f"{target.chain.var} = {target.seg}"] + self.chain_jump(
+                target.chain
+            )
         types = target.branch_types
         values = self.stack[len(self.stack) - len(types) :] if types else []
         names = target.params if target.kind == "loop" else target.vars
@@ -952,6 +1086,80 @@ class Translator:
         self.indent = 0
         self.cur_pc = pc
         self.dead = False
+
+    def open_chain(self, k: int) -> None:
+        self.settle()
+        self.nlabel += 1
+        chain = Chain(self.nlabel, k + 1)
+        self.nlabel += 1
+        chain.cont_id = self.nlabel
+        height = len(self.stack)
+        labels = []
+        for j in range(k):  # outermost first
+            self.nlabel += 1
+            label = Label("block", self.nlabel, (), (), height)
+            label.chain = chain
+            label.seg = None if j == 0 else k - j
+            labels.append(label)
+        labels[0].pyloop = True
+        chain.holder = labels[0]
+        self.emit(f"{chain.var} = 0")
+        self.emit("while True:")
+        self.indent += 1
+        chain.base = self.indent
+        self.labels.extend(labels)
+        self.enter_leaf(chain, 0)
+
+    def enter_leaf(self, chain: Chain, i: int) -> None:
+        """Emit the if/else lines leading to leaf i of the dispatch tree."""
+        new = chain.path(i)
+        level = 0
+        if chain.leaf >= 0:
+            old = chain.path(chain.leaf)
+            while old[level] == new[level]:
+                level += 1
+            self.indent = chain.base + level
+            self.emit("else:")
+            level += 1
+        for depth in range(level, len(new)):
+            self.indent = chain.base + depth
+            self.emit(f"if {chain.var} < {new[depth][0]}:")
+        self.indent = chain.base + len(new)
+        chain.leaf = i
+
+    def close_chain_block(self, label: Label) -> None:
+        chain = label.chain
+        fall = not self.dead
+        self.stack = self.stack[: label.height]
+        if label.seg is not None:
+            # the end of a segment: fall through into the next one
+            if fall:
+                self.emit(f"{chain.var} = {label.seg}")
+                self.emit("continue")
+            self.enter_leaf(chain, label.seg)
+            self.dead = False
+            return
+        # the end of the chain
+        if fall:
+            self.emit("break")
+        self.enter_leaf(chain, chain.n - 1)
+        self.emit("break")
+        self.indent = chain.base - 1
+        if label.crossed:
+            self.flag_check()
+        self.dead = not (fall or label.branched)
+
+    def chain_jump(self, chain: Chain) -> list[str]:
+        """Lines that restart the chain loop (after setting its variable)."""
+        position = self.labels.index(chain.holder)
+        inner = [label for label in self.labels[position + 1 :] if label.pyloop]
+        if not inner:
+            return ["continue"]
+        self.uses_flag = True
+        chain.cont_used = True
+        for label in inner:
+            label.crossed = True
+        return [f"br_ = {chain.cont_id}", "break"]
 
     def open(self, name: str, blocktype: Any, targeted: bool) -> None:
         cond = self.pop() if name == "if" else None
@@ -1033,6 +1241,9 @@ class Translator:
     def close(self) -> bool:
         """Handle `end`. Returns True at the end of the function."""
         label = self.labels.pop()
+        if label.chain is not None:
+            self.close_chain_block(label)
+            return False
         fall = not self.dead
         if label.kind == "func":
             if fall:
@@ -1120,6 +1331,11 @@ class Translator:
             self.emit(f"if br_ == {parent.id}:")
             self.emit("    br_ = 0")
             self.emit("    continue" if parent.kind == "loop" else "    break")
+        if parent is not None and parent.chain is not None and parent.chain.cont_used:
+            # a branch to a later segment of the chain
+            self.emit(f"if br_ == {parent.chain.cont_id}:")
+            self.emit("    br_ = 0")
+            self.emit("    continue")
         self.emit("break")
         self.indent -= 1
 
@@ -1429,7 +1645,7 @@ def python_source(wfunc: Any) -> str:
 
 
 def _cache_key(index: int, has_limits: bool) -> tuple:
-    return (index, has_limits, FORCE_STATE_MACHINE)
+    return (index, has_limits, FORCE_STATE_MACHINE, FORCE_CHAINS)
 
 
 def is_cached(module: Any, index: int, has_limits: bool) -> bool:

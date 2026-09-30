@@ -87,15 +87,47 @@ def test_shallow_functions_use_structured_control_flow():
     assert "pc = " not in source
 
 
-@pytest.mark.parametrize("n", [3, 40])
+@pytest.mark.parametrize("n", [3, 40, 300])
 def test_deep_switches(n):
     inst = load(switch_module(n))
     for k in range(n):
         assert inst.exports.f(k) == k * 10
     assert inst.exports.f(n) == 999
     assert inst.exports.f(10_000) == 999
-    uses_state_machine = "pc = " in python_source(inst.functions[0])
-    assert uses_state_machine == (n > 3)
+    source = python_source(inst.functions[0])
+    # deep switches stay structured: the chain of blocks becomes one loop
+    # that dispatches on a segment variable
+    assert "pc = " not in source
+    assert ("s1 = (" in source) == (n > 3)
+
+
+CHAIN = """(module (func (export "f") (param i32) (result i32) (local i32)
+  (block $b1
+    (block $b2
+      (block $b3
+        (block $b4
+          (br_table $b4 $b3 $b2 $b1 (local.get 0)))
+        ;; case 0: add 1, then fall through into case 1
+        (local.set 1 (i32.add (local.get 1) (i32.const 1))))
+      ;; case 1: a loop that jumps to case 2, or out of the switch
+      (loop $l
+        (local.set 1 (i32.add (local.get 1) (i32.const 10)))
+        (br_if $b2 (i32.eq (local.get 1) (i32.const 21)))
+        (br_if $b1 (i32.gt_u (local.get 1) (i32.const 25)))
+        (br $l)))
+    ;; case 2
+    (local.set 1 (i32.add (local.get 1) (i32.const 100))))
+  (local.get 1)))"""
+
+
+@pytest.mark.parametrize("force", [False, True])
+def test_block_chains(monkeypatch, force):
+    import pwasm.codegen
+
+    monkeypatch.setattr(pwasm.codegen, "FORCE_CHAINS", force)
+    inst = load(CHAIN)
+    assert [inst.exports.f(i) for i in range(5)] == [121, 30, 100, 0, 0]
+    assert ("s1 = " in python_source(inst.functions[0])) == force
 
 
 def test_deeply_nested_loops_use_a_state_machine():

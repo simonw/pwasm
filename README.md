@@ -308,7 +308,7 @@ Each WebAssembly function call is a Python call, so exceptions raised by Python 
 
 ### Compiling to Python
 
-pwasm can also translate a WebAssembly function into Python source code (`codegen.py`), which CPython then runs directly - typically 8 to 14 times faster than the interpreter. The operand stack disappears: pure instructions are folded into Python expressions over local variables, and masking to 32 or 64 bits is delayed until a value needs to be exact. Structured control flow becomes `while True:` loops and `if` statements; functions nested more deeply than CPython allows (C `switch` statements compile to deeply nested blocks) become a state machine over basic blocks instead.
+pwasm can also translate a WebAssembly function into Python source code (`codegen.py`), which CPython then runs directly - typically 8 to 14 times faster than the interpreter. The operand stack disappears: pure instructions are folded into Python expressions over local variables, and masking to 32 or 64 bits is delayed until a value needs to be exact. Structured control flow becomes `while True:` loops and `if` statements. C `switch` statements compile to blocks nested more deeply than CPython allows, so a chain of consecutive blocks becomes a single loop that dispatches on a segment variable (a `br_table` into the chain is a tuple lookup); the rare function that is still too deep becomes a state machine over basic blocks instead.
 
 `instantiate()` takes a `mode`:
 
