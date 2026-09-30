@@ -149,3 +149,12 @@ def test_reinterpret_round_trips_nan_bits():
     assert (
         inst.exports.from_f64(-2.0) == struct.unpack("<q", struct.pack("<d", -2.0))[0]
     )
+
+
+def test_demote_quiets_signalling_nans():
+    # Python 3.14's struct keeps signalling NaNs when narrowing to f32;
+    # WebAssembly requires demote to produce a quiet (arithmetic) NaN
+    inst = load("""(module (func (export "f") (param i64) (result i32)
+      (i32.reinterpret_f32 (f32.demote_f64 (f64.reinterpret_i64 (local.get 0))))))""")
+    for bits in (0x7FF4000000000000, 0xFFF4000000000000 - 2**64):
+        assert inst.exports.f(bits) & 0x7FC00000 == 0x7FC00000

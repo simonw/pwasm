@@ -527,6 +527,8 @@ def f64_convert_u(a: int) -> float:
 
 
 def f32_demote_f64(a: float) -> float:
+    if a != a:
+        a = a + 0.0  # quiet a signalling NaN (Python 3.14 would keep it)
     return f32_round(a)
 
 
