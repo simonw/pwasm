@@ -130,6 +130,59 @@ def test_block_chains(monkeypatch, force):
     assert ("s1 = " in python_source(inst.functions[0])) == force
 
 
+TYPED_CHAIN = """(module (func (export "f") (param i32) (result i32) (local i32)
+  (block $b1
+    (block $b2 (result i32)
+      (block $b3
+        (block $b4
+          (br_table $b4 $b3 $b1 (local.get 0)))
+        ;; case 0
+        (local.set 1 (i32.const 5)))
+      ;; case 1, and case 0 falls through: $b2 gets a value either way
+      (drop (br_if $b2 (i32.const 7) (i32.eqz (local.get 1))))
+      (i32.add (local.get 1) (i32.const 1000)))
+    (local.set 1 (i32.mul (i32.const 2))))
+  (local.get 1)))"""
+
+
+@pytest.mark.parametrize("force", [False, True])
+def test_block_chains_with_results(monkeypatch, force):
+    import pwasm.codegen
+
+    monkeypatch.setattr(pwasm.codegen, "FORCE_CHAINS", force)
+    inst = load(TYPED_CHAIN)
+    assert [inst.exports.f(i) for i in range(4)] == [2010, 14, 0, 0]
+    # one chain, so the br_table is a lookup
+    assert ("s1 = (" in python_source(inst.functions[0])) == force
+
+
+OUTER_TARGETS = """(module (func (export "f") (param i32) (result i32) (local i32)
+  (block $out
+    (loop $top
+      (local.set 1 (i32.add (local.get 1) (i32.const 1)))
+      (block $b1
+        (block $b2
+          (block $b3
+            ;; 0 -> $b3, 1 -> $b2, 2 -> $out, 3 -> $top, default -> $b1
+            (br_table $b3 $b2 $out $top $b1
+              (i32.sub (local.get 0) (local.get 1))))
+          (local.set 1 (i32.add (local.get 1) (i32.const 10))))
+        (local.set 1 (i32.add (local.get 1) (i32.const 100))))
+      (local.set 1 (i32.add (local.get 1) (i32.const 1000)))))
+  (local.get 1)))"""
+
+
+@pytest.mark.parametrize("force", [False, True])
+def test_br_table_into_a_chain_and_out_of_it(monkeypatch, force):
+    import pwasm.codegen
+
+    monkeypatch.setattr(pwasm.codegen, "FORCE_CHAINS", force)
+    inst = load(OUTER_TARGETS)
+    results = [inst.exports.f(i) for i in range(-1, 7)]
+    assert results == [1001, 1001, 1111, 1101, 1, 2, 1001, 1001]
+    assert ("s3 = (" in python_source(inst.functions[0])) == force
+
+
 def test_deeply_nested_loops_use_a_state_machine():
     inst = load(nested_loops_module(25))
     assert inst.exports.f(10) == 10

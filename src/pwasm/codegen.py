@@ -519,16 +519,17 @@ class Translator:
 
     def find_chains(self) -> dict[int, int]:
         body = self.func.body
+
+        def chainable(ip: int) -> bool:
+            ins = body[ip]
+            return ins.opcode == "block" and not self.signature(ins.operand)[0]
+
         chains = {}
         ip = 0
         while ip < len(body):
-            if body[ip].opcode == "block" and body[ip].operand == ():
+            if chainable(ip):
                 end = ip
-                while (
-                    end < len(body)
-                    and body[end].opcode == "block"
-                    and body[end].operand == ()
-                ):
+                while end < len(body) and chainable(end):
                     end += 1
                 if end - ip >= 2:
                     chains[ip] = end - ip
@@ -594,7 +595,7 @@ class Translator:
             if handler is not None:
                 handler(self, name, arg)
             elif ip in self.chains:
-                self.open_chain(self.chains[ip])
+                self.open_chain(ip, self.chains[ip])
             elif name in ("block", "loop", "if"):
                 self.open(name, arg, ip in targeted)
             elif name == "end":
@@ -977,31 +978,53 @@ class Translator:
         self.dead = True
 
     def chain_table(self, index: str, depths: Any, targets: list) -> bool:
-        """br_table to the blocks of one chain: look the segment up in a
-        tuple. Returns False if the targets are not all in one chain."""
-        if len(depths) < 2:
+        """br_table into the blocks of a chain: look the segment up in a
+        tuple (after testing for any targets outside the chain). Returns
+        False if the targets are not mostly in one chain."""
+        if len(depths) < 2 or any(t.branch_types for t in targets):
             return False
-        chain = targets[0].chain
-        if chain is None or any(t.chain is not chain for t in targets[:-1]):
-            return False
-        segs = []
+        counts: dict[Chain, int] = {}
         for t in targets[:-1]:
-            if t.seg is None:
-                t.branched = True
-                segs.append(chain.n - 1)
+            if t.chain is not None:
+                counts[t.chain] = counts.get(t.chain, 0) + 1
+        if not counts:
+            return False
+        chain = max(counts, key=counts.__getitem__)
+        outside: dict[int, list[int]] = {}
+        segs = []
+        for i, (d, t) in enumerate(zip(depths, targets)):
+            if t.chain is chain:
+                segs.append(self.chain_seg(t))
             else:
-                segs.append(t.seg)
+                outside.setdefault(d, []).append(i)
+                segs.append(0)  # never used
+        if counts[chain] < 2 or len(outside) > counts[chain]:
+            return False
+        first = True
+        for d, indexes in outside.items():
+            if len(indexes) == 1:
+                test = f"{index} == {indexes[0]}"
+            else:
+                test = f"{index} in {tuple(indexes)!r}"
+            self.emit(f"{'if' if first else 'elif'} {test}:")
+            self.indent += 1
+            self.emit_lines(self.branch(d))
+            self.indent -= 1
+            first = False
         table = "(" + ", ".join(map(str, segs)) + ",)"
-        default = targets[-1]
         n = len(depths)
+        default = targets[-1]
         if default.chain is chain:
-            dseg = chain.n - 1 if default.seg is None else default.seg
-            if default.seg is None:
-                default.branched = True
+            if not first:
+                self.emit("else:")
+                self.indent += 1
+            dseg = self.chain_seg(default)
             self.emit(f"{chain.var} = {table}[{index}] if {index} < {n} else {dseg}")
             self.emit_lines(self.chain_jump(chain))
+            if not first:
+                self.indent -= 1
             return True
-        self.emit(f"if {index} < {n}:")
+        self.emit(f"{'if' if first else 'elif'} {index} < {n}:")
         self.indent += 1
         self.emit(f"{chain.var} = {table}[{index}]")
         self.emit_lines(self.chain_jump(chain))
@@ -1011,6 +1034,13 @@ class Translator:
         self.emit_lines(self.branch(len(self.labels) - 1 - self.labels.index(default)))
         self.indent -= 1
         return True
+
+    def chain_seg(self, target: Label) -> int:
+        """The dispatch leaf a branch to a block of a chain goes to."""
+        if target.seg is not None:
+            return target.seg
+        target.branched = True
+        return target.chain.n - 1  # the exit leaf
 
     # --- control flow ---
 
@@ -1049,14 +1079,14 @@ class Translator:
         target = self.labels[position]
         if target.kind == "func":
             return [self.return_stmt()]
-        if target.chain is not None and target.seg is not None and self.structured:
-            return [f"{target.chain.var} = {target.seg}"] + self.chain_jump(
-                target.chain
-            )
         types = target.branch_types
         values = self.stack[len(self.stack) - len(types) :] if types else []
         names = target.params if target.kind == "loop" else target.vars
         lines = self.assign(names, values)
+        if target.seg is not None:
+            # to a later segment of a chain
+            chain = target.chain
+            return lines + [f"{chain.var} = {target.seg}"] + self.chain_jump(chain)
         if target.kind != "loop":
             target.branched = True
         if not self.structured:
@@ -1087,7 +1117,7 @@ class Translator:
         self.cur_pc = pc
         self.dead = False
 
-    def open_chain(self, k: int) -> None:
+    def open_chain(self, start: int, k: int) -> None:
         self.settle()
         self.nlabel += 1
         chain = Chain(self.nlabel, k + 1)
@@ -1097,7 +1127,9 @@ class Translator:
         labels = []
         for j in range(k):  # outermost first
             self.nlabel += 1
-            label = Label("block", self.nlabel, (), (), height)
+            results = self.signature(self.func.body[start + j].operand)[1]
+            label = Label("block", self.nlabel, (), results, height)
+            label.vars = [f"r{label.id}_{i}" for i in range(len(results))]
             label.chain = chain
             label.seg = None if j == 0 else k - j
             labels.append(label)
@@ -1130,7 +1162,12 @@ class Translator:
     def close_chain_block(self, label: Label) -> None:
         chain = label.chain
         fall = not self.dead
-        self.stack = self.stack[: label.height]
+        if fall:
+            self.emit_lines(self.assign(label.vars, self.results_of(label)))
+        self.stack = self.stack[: label.height] + [
+            V(name, type, simple=True, stable=True)
+            for name, type in zip(label.vars, label.result_types)
+        ]
         if label.seg is not None:
             # the end of a segment: fall through into the next one
             if fall:
