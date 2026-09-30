@@ -80,13 +80,13 @@
 
 - [x] Implement f32 and f64 value types with proper bit representation
 - [x] Execute `f32.const`, `f64.const`
-- [ ] Execute `f32.add`, `f32.sub`, `f32.mul`, `f32.div` (and f64 variants)
-- [ ] Execute `f32.abs`, `f32.neg`, `f32.sqrt`
-- [ ] Execute `f32.ceil`, `f32.floor`, `f32.trunc`, `f32.nearest`
-- [ ] Execute `f32.min`, `f32.max`
-- [ ] Execute `f32.copysign`
-- [ ] Execute all f32 comparison ops
-- [ ] Execute all f64 operations (mirrors f32)
+- [x] Execute `f32.add`, `f32.sub`, `f32.mul`, `f32.div` (and f64 variants)
+- [x] Execute `f32.abs`, `f32.neg`, `f32.sqrt`
+- [x] Execute `f32.ceil`, `f32.floor`, `f32.trunc`, `f32.nearest`
+- [x] Execute `f32.min`, `f32.max`
+- [x] Execute `f32.copysign`
+- [x] Execute all f32 comparison ops
+- [x] Execute all f64 operations (mirrors f32)
 - [ ] Execute integer-float conversions (i32/i64 <-> f32/f64)
 - [ ] Execute `f32.reinterpret_i32`, `f64.reinterpret_i64`
 - [ ] Execute `i32.reinterpret_f32`, `i64.reinterpret_f64`
@@ -221,15 +221,15 @@
 - [ ] Pass `func_ptrs.wast`
 
 **Float Tests:**
-- [ ] Pass `f32.wast`
-- [ ] Pass `f64.wast`
-- [ ] Pass `f32_cmp.wast`
-- [ ] Pass `f64_cmp.wast`
-- [ ] Pass `f32_bitwise.wast`
-- [ ] Pass `f64_bitwise.wast`
+- [x] Pass `f32.wast`
+- [x] Pass `f64.wast`
+- [x] Pass `f32_cmp.wast`
+- [x] Pass `f64_cmp.wast`
+- [x] Pass `f32_bitwise.wast`
+- [x] Pass `f64_bitwise.wast`
 - [ ] Pass `float_literals.wast`
 - [ ] Pass `float_exprs.wast`
-- [ ] Pass `float_misc.wast`
+- [x] Pass `float_misc.wast`
 - [x] Pass `float_memory.wast`
 - [ ] Pass `conversions.wast`
 

@@ -9,6 +9,7 @@ signalling NaN from single to double precision can quiet it.
 
 from __future__ import annotations
 
+import math
 import struct
 
 from .errors import TrapError
@@ -264,5 +265,155 @@ def i64_extend32_s(a: int) -> int:
     return (((a & MASK_32) ^ SIGN_32) - SIGN_32) & MASK_64
 
 
+# --- floating point ---
+#
+# Python float arithmetic is IEEE 754 double precision, except that division
+# by zero raises and math functions raise instead of returning NaN. f32
+# results are computed in double precision and rounded once, which gives
+# correctly rounded results for +, -, *, / and sqrt.
+
+NAN = float("nan")
+
+
 def f32_add(a: float, b: float) -> float:
     return f32_round(a + b)
+
+
+def f32_sub(a: float, b: float) -> float:
+    return f32_round(a - b)
+
+
+def f32_mul(a: float, b: float) -> float:
+    return f32_round(a * b)
+
+
+def f32_div(a: float, b: float) -> float:
+    return f32_round(f64_div(a, b))
+
+
+def f32_sqrt(a: float) -> float:
+    return f32_round(f64_sqrt(a))
+
+
+def f64_add(a: float, b: float) -> float:
+    return a + b
+
+
+def f64_sub(a: float, b: float) -> float:
+    return a - b
+
+
+def f64_mul(a: float, b: float) -> float:
+    return a * b
+
+
+def f64_div(a: float, b: float) -> float:
+    try:
+        return a / b
+    except ZeroDivisionError:
+        if a != a:
+            return a + 0.0  # quiet a signalling NaN
+        if a == 0.0:
+            return NAN
+        return (
+            INF if (math.copysign(1.0, a) > 0) == (math.copysign(1.0, b) > 0) else -INF
+        )
+
+
+def f64_sqrt(a: float) -> float:
+    try:
+        return math.sqrt(a)
+    except ValueError:
+        return NAN
+
+
+def f64_min(a: float, b: float) -> float:
+    if a != a or b != b:
+        return a + b  # a (quiet) NaN
+    if a == b:
+        # min(-0.0, 0.0) is -0.0
+        return a if math.copysign(1.0, a) < 0 else b
+    return a if a < b else b
+
+
+def f64_max(a: float, b: float) -> float:
+    if a != a or b != b:
+        return a + b
+    if a == b:
+        return b if math.copysign(1.0, a) < 0 else a
+    return a if a > b else b
+
+
+def f64_ceil(a: float) -> float:
+    if a != a:
+        return a + 0.0
+    if a in (INF, -INF) or a == 0.0:
+        return a
+    return math.copysign(float(math.ceil(a)), a)
+
+
+def f64_floor(a: float) -> float:
+    if a != a:
+        return a + 0.0
+    if a in (INF, -INF) or a == 0.0:
+        return a
+    return math.copysign(float(math.floor(a)), a)
+
+
+def f64_trunc(a: float) -> float:
+    if a != a:
+        return a + 0.0
+    if a in (INF, -INF) or a == 0.0:
+        return a
+    return math.copysign(float(math.trunc(a)), a)
+
+
+def f64_nearest(a: float) -> float:
+    if a != a:
+        return a + 0.0
+    if a in (INF, -INF) or a == 0.0:
+        return a
+    # round() on a float rounds half to even
+    return math.copysign(float(round(a)), a)
+
+
+def f64_abs(a: float) -> float:
+    return math.fabs(a)
+
+
+def f64_neg(a: float) -> float:
+    return -a
+
+
+def f64_copysign(a: float, b: float) -> float:
+    return math.copysign(a, b)
+
+
+def f32_abs(a: float) -> float:
+    if type(a) is F32NaN:
+        return F32NaN(a.bits & 0x7FFFFFFF)
+    return math.fabs(a)
+
+
+def f32_neg(a: float) -> float:
+    if type(a) is F32NaN:
+        return F32NaN(a.bits ^ 0x80000000)
+    return -a
+
+
+def f32_copysign(a: float, b: float) -> float:
+    if type(b) is F32NaN:
+        negative = b.bits >> 31
+    else:
+        negative = math.copysign(1.0, b) < 0
+    if type(a) is F32NaN:
+        return F32NaN((a.bits & 0x7FFFFFFF) | (0x80000000 if negative else 0))
+    return math.copysign(a, -1.0 if negative else 1.0)
+
+
+def f32_min(a: float, b: float) -> float:
+    return float(f64_min(a, b))
+
+
+def f32_max(a: float, b: float) -> float:
+    return float(f64_max(a, b))

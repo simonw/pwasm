@@ -12,6 +12,7 @@ Compiled code is two parallel lists: `ops` (internal opcodes, below) and
 
 from __future__ import annotations
 
+import math
 import operator
 import struct
 from typing import Any
@@ -163,6 +164,32 @@ BINOP_FUNCS: dict[str, Any] = {
     "i64.le_s": num.i64_le_s,
     "i64.ge_s": num.i64_ge_s,
     "f32.add": num.f32_add,
+    "f32.sub": num.f32_sub,
+    "f32.mul": num.f32_mul,
+    "f32.div": num.f32_div,
+    "f32.min": num.f32_min,
+    "f32.max": num.f32_max,
+    "f32.copysign": num.f32_copysign,
+    "f64.add": operator.add,
+    "f64.sub": operator.sub,
+    "f64.mul": operator.mul,
+    "f64.div": num.f64_div,
+    "f64.min": num.f64_min,
+    "f64.max": num.f64_max,
+    "f64.copysign": math.copysign,
+    # comparisons follow IEEE 754 in Python, including for NaN
+    "f32.eq": operator.eq,
+    "f32.ne": operator.ne,
+    "f32.lt": operator.lt,
+    "f32.gt": operator.gt,
+    "f32.le": operator.le,
+    "f32.ge": operator.ge,
+    "f64.eq": operator.eq,
+    "f64.ne": operator.ne,
+    "f64.lt": operator.lt,
+    "f64.gt": operator.gt,
+    "f64.le": operator.le,
+    "f64.ge": operator.ge,
 }
 
 UNOP_FUNCS: dict[str, Any] = {
@@ -180,6 +207,21 @@ UNOP_FUNCS: dict[str, Any] = {
     "i64.extend8_s": num.i64_extend8_s,
     "i64.extend16_s": num.i64_extend16_s,
     "i64.extend32_s": num.i64_extend32_s,
+    "f32.abs": num.f32_abs,
+    "f32.neg": num.f32_neg,
+    "f32.sqrt": num.f32_sqrt,
+    # rounding an f32 value to an integer gives an f32 value
+    "f32.ceil": num.f64_ceil,
+    "f32.floor": num.f64_floor,
+    "f32.trunc": num.f64_trunc,
+    "f32.nearest": num.f64_nearest,
+    "f64.abs": math.fabs,
+    "f64.neg": operator.neg,
+    "f64.sqrt": num.f64_sqrt,
+    "f64.ceil": num.f64_ceil,
+    "f64.floor": num.f64_floor,
+    "f64.trunc": num.f64_trunc,
+    "f64.nearest": num.f64_nearest,
 }
 
 # Instructions that leave the (internal representation of the) value alone

@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from .errors import TrapError
-from .numeric import f32_round
+from .numeric import F32NaN, f32_round
 from .types import FuncType, GlobalType, Function
 
 MASK_32 = 0xFFFFFFFF
@@ -50,10 +50,17 @@ TO_PYTHON: dict[str, Callable[[Any], Any]] = {
     "externref": _identity,
 }
 
+
+def _f32_from_python(v: Any) -> float:
+    if type(v) is F32NaN:
+        return v
+    return f32_round(float(v))
+
+
 FROM_PYTHON: dict[str, Callable[[Any], Any]] = {
     "i32": _i32_from_python,
     "i64": _i64_from_python,
-    "f32": lambda v: f32_round(float(v)),
+    "f32": _f32_from_python,
     "f64": float,
     "funcref": _identity,
     "externref": _identity,

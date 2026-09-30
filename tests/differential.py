@@ -1,5 +1,7 @@
 """Differential testing helpers: run the same export in pwasm and wasmtime."""
 
+import struct
+
 import wasmtime
 
 from pwasm import TrapError, decode_module, instantiate
@@ -36,6 +38,20 @@ class Pair:
                 isinstance(actual, tuple) and actual[0] == "trap"
             ), f"{name}{args}: expected trap {expected[1]!r}, got {actual!r}"
         else:
-            assert (
-                actual == expected
+            assert same(
+                actual, expected
             ), f"{name}{args}: expected {expected!r}, got {actual!r}"
+
+
+def same(actual, expected) -> bool:
+    """Equal values; floats must match bit for bit, but any NaN matches any
+    NaN (NaN payloads of arithmetic results are implementation specific)."""
+    if isinstance(expected, float):
+        if not isinstance(actual, float):
+            return False
+        if expected != expected:
+            return actual != actual
+        return struct.pack("<d", actual) == struct.pack("<d", expected)
+    if isinstance(expected, (list, tuple)):
+        return len(actual) == len(expected) and all(map(same, actual, expected))
+    return actual == expected
