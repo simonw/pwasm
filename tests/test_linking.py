@@ -8,6 +8,8 @@ from pwasm.runtime import GlobalInstance, MemoryInstance, TableInstance
 from pwasm.types import GlobalType
 from wat import load
 
+pytestmark = pytest.mark.usefixtures("each_mode")
+
 
 def test_import_memory_created_in_python():
     memory = MemoryInstance(1, 2)

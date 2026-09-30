@@ -5,6 +5,8 @@ import pytest
 from pwasm import TrapError
 from wat import load
 
+pytestmark = pytest.mark.usefixtures("each_mode")
+
 DISPATCH = """(module
   (type $binop (func (param i32 i32) (result i32)))
   (type $unop (func (param i32) (result i32)))

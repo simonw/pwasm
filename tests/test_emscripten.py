@@ -7,6 +7,8 @@ from pwasm import TrapError, decode_module, instantiate
 from pwasm.emscripten import EmscriptenSjLj
 from wat import wat2wasm
 
+pytestmark = pytest.mark.usefixtures("each_mode")
+
 # Mimics the ABI: invoke_vi calls a table entry; the callee may "longjmp"
 # by calling _emscripten_throw_longjmp; the trampoline then restores the
 # stack pointer and calls setThrew(1, 0).

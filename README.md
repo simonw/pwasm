@@ -291,6 +291,7 @@ except DecodeError as e:
 - **types.py** - WebAssembly type system (i32, i64, f32, f64, funcref, externref)
 - **compiler.py** - Compiles each function, on its first call, into flat lists of internal opcodes and immediates
 - **executor.py** - The interpreter loop, module instantiation and exports
+- **codegen.py** - Compiles functions to Python source code
 - **runtime.py** - Memories, tables, globals, function instances and resource limits
 - **sandbox.py**, **wasi.py**, **emscripten.py** - Running real programs: import resolution, WASI and setjmp/longjmp
 - **guests/** - MicroPython, QuickJS and Micro QuickJS guests
@@ -303,7 +304,27 @@ Structured control flow is compiled away before execution: `block`, `loop` and `
 
 Internally i32 and i64 values are stored as unsigned Python integers. Values are converted to signed integers when they are returned to Python code.
 
-Each WebAssembly function call is a Python call of the interpreter, so exceptions raised by Python code propagate through WebAssembly frames.
+Each WebAssembly function call is a Python call, so exceptions raised by Python code propagate through WebAssembly frames.
+
+### Compiling to Python
+
+pwasm can also translate a WebAssembly function into Python source code (`codegen.py`), which CPython then runs directly - typically 8 to 14 times faster than the interpreter. The operand stack disappears: pure instructions are folded into Python expressions over local variables, and masking to 32 or 64 bits is delayed until a value needs to be exact. Structured control flow becomes `while True:` loops and `if` statements; functions nested more deeply than CPython allows (C `switch` statements compile to deeply nested blocks) become a state machine over basic blocks instead.
+
+`instantiate()` takes a `mode`:
+
+- `"auto"` (the default) interprets each function until it has been called twice, then compiles it - code that only runs once is not worth compiling
+- `"compile"` compiles every function to Python on its first call
+- `"interpret"` never compiles
+
+```python
+instance = instantiate(module, mode="compile")
+instance.exports.run()
+
+from pwasm.codegen import python_source
+print(python_source(instance.functions[0]))  # the generated Python
+```
+
+Compiled code objects are cached on the module, so further instances of the same module reuse them.
 
 ## Development
 

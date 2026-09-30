@@ -7,6 +7,8 @@ import pytest
 from pwasm import TrapError
 from wat import load
 
+pytestmark = pytest.mark.usefixtures("each_mode")
+
 LOADS_AND_STORES = """(module
   (memory (export "memory") 1 3)
   (func (export "store32") (param i32 i32) (i32.store (local.get 0) (local.get 1)))

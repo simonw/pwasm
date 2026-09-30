@@ -5,6 +5,8 @@ import pytest
 from pwasm import LinkError, TrapError
 from wat import load
 
+pytestmark = pytest.mark.usefixtures("each_mode")
+
 
 def test_imported_function_shifts_function_index_space():
     inst = load(

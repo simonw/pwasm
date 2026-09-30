@@ -10,6 +10,8 @@ import pytest
 
 from spec_runner import run_wast
 
+pytestmark = pytest.mark.usefixtures("each_mode")
+
 SPEC_DIR = Path(__file__).parent / "spec"
 
 KNOWN_FAILURES: set[str] = set()

@@ -9,6 +9,8 @@ from differential import Pair
 from pwasm.numeric import F32NaN, f32_to_bits
 from wat import load
 
+pytestmark = pytest.mark.usefixtures("each_mode")
+
 FLOATS = [
     0.0,
     -0.0,
@@ -95,7 +97,7 @@ def conversion_module() -> str:
 
 
 @pytest.fixture(scope="module")
-def pair():
+def pair(each_mode):
     return Pair(conversion_module())
 
 

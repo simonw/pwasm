@@ -8,6 +8,8 @@ from pwasm import LinkError, OutOfFuel, Timeout, TrapError, decode_module, insta
 from pwasm.runtime import Limits
 from wat import wat2wasm
 
+pytestmark = pytest.mark.usefixtures("each_mode")
+
 LOOPS = """(module
   (memory 1)
   (func (export "spin") (loop $l (br $l)))
@@ -78,11 +80,12 @@ def test_deadline_stops_an_infinite_loop():
 
 
 def test_unlimited_instances_compile_without_ticks():
-    inst = load()
-    inst.exports.count(3)
-    limited = load(Limits(fuel=100))
+    module = decode_module(wat2wasm(LOOPS))
+    unlimited = instantiate(module, mode="interpret")
+    unlimited.exports.count(3)
+    limited = instantiate(module, limits=Limits(fuel=100), mode="interpret")
     limited.exports.count(3)
-    assert len(limited.functions[1].code.ops) > len(inst.functions[1].code.ops)
+    assert len(limited.functions[1].code.ops) > len(unlimited.functions[1].code.ops)
 
 
 def test_max_memory_caps_memory_grow():

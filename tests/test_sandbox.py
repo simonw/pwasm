@@ -6,6 +6,8 @@ from pwasm import LinkError, OutOfFuel, Timeout
 from pwasm.sandbox import Sandbox
 from wat import wat2wasm
 
+pytestmark = pytest.mark.usefixtures("each_mode")
+
 # A reactor with a bump allocator, a WASI write and some busy loops
 REACTOR = wat2wasm("""(module
   (import "wasi_snapshot_preview1" "fd_write" (func $fd_write (param i32 i32 i32 i32) (result i32)))

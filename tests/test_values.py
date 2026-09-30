@@ -1,7 +1,10 @@
 """Values have one consistent internal representation, and i32/i64 results
 are returned to Python as signed integers."""
 
+import pytest
 from wat import load
+
+pytestmark = pytest.mark.usefixtures("each_mode")
 
 
 def test_div_u_result_equals_signed_constant():

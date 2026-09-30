@@ -276,9 +276,27 @@ class GlobalInstance:
 
 
 class WasmFunction:
-    """A function defined by a module instance; compiled on first call."""
+    """A function defined by a module instance.
 
-    __slots__ = ("type", "instance", "func", "index", "code", "n_params", "n_results")
+    It runs in the interpreter (compiled on first call to interpreter code,
+    `code`) until `countdown` calls have been made, then it is compiled to a
+    Python function (`pyfunc`, see codegen.py). `entry` is always the
+    fastest way to call it with internal values as positional arguments.
+    """
+
+    __slots__ = (
+        "type",
+        "instance",
+        "func",
+        "index",
+        "code",
+        "n_params",
+        "n_results",
+        "pyfunc",
+        "entry",
+        "countdown",
+        "_refs",
+    )
 
     def __init__(
         self, type: FuncType, instance: Any, func: Function, index: int
@@ -290,12 +308,43 @@ class WasmFunction:
         self.code = None
         self.n_params = len(type.params)
         self.n_results = len(type.results)
+        self.pyfunc = None
+        # calls left before compiling to Python (0: never)
+        self.countdown = 0
+        self.entry: Callable[..., Any] = self._interpret
+        # (namespace, name) pairs referring to entry, updated on tier-up
+        self._refs: list = []
+
+    def _interpret(self, *args: Any) -> Any:
+        from .executor import execute
+
+        return execute(self, list(args))
 
     def compile(self):
         from .compiler import compile_function
 
         self.code = compile_function(self)
         return self.code
+
+    def tier_up(self) -> bool:
+        """Compile to a Python function. Returns False (and stays in the
+        interpreter) if that fails, unless the instance is in "compile"
+        mode, where the error is raised."""
+        from .codegen import compile_to_python
+
+        self.countdown = 0
+        try:
+            pyfunc = compile_to_python(self)
+        except Exception as e:
+            if getattr(self.instance, "mode", None) == "compile":
+                raise
+            self.instance.compile_errors.append((self.index, e))
+            return False
+        self.pyfunc = pyfunc
+        self.entry = pyfunc
+        for namespace, name in self._refs:
+            namespace[name] = pyfunc
+        return True
 
     def __call__(self, *args: Any) -> Any:
         """Call with Python values, like an exported function."""
@@ -320,6 +369,7 @@ class HostFunction:
         "raw",
         "n_params",
         "n_results",
+        "entry",
         "_to_python",
         "_from_python",
     )
@@ -337,8 +387,13 @@ class HostFunction:
         self.n_results = len(type.results)
         self._to_python = [TO_PYTHON[t] for t in type.params]
         self._from_python = [FROM_PYTHON[t] for t in type.results]
+        # called with internal values as positional arguments
+        self.entry: Callable[..., Any] = fn if raw else self._call_positional
 
-    def call(self, args: list) -> Any:
+    def _call_positional(self, *args: Any) -> Any:
+        return self.call(args)
+
+    def call(self, args: Any) -> Any:
         """Call with internal values; returns internal results in the same
         shape as wasm functions (None, a value, or a list)."""
         if self.raw:

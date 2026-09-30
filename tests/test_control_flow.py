@@ -4,6 +4,8 @@ import pytest
 
 from wat import load
 
+pytestmark = pytest.mark.usefixtures("each_mode")
+
 
 def test_br_discards_extra_values():
     inst = load("""(module (func (export "f") (result i32)

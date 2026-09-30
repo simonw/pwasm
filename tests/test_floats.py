@@ -7,6 +7,8 @@ import pytest
 
 from differential import Pair
 
+pytestmark = pytest.mark.usefixtures("each_mode")
+
 INF = math.inf
 NAN = math.nan
 VALUES = [
@@ -75,7 +77,7 @@ def module_for(t: str) -> str:
 
 
 @pytest.fixture(scope="module", params=["f32", "f64"])
-def floats(request):
+def floats(request, each_mode):
     return Pair(module_for(request.param))
 
 

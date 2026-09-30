@@ -108,7 +108,14 @@ def execute(func: WasmFunction, args: list) -> Any:
     """Run a WebAssembly function on internal values.
 
     `args` becomes the function's locals, so callers pass a list they own.
-    Returns None, a single value, or a list of values."""
+    Returns None, a single value, or a list (or tuple) of values."""
+    pyfunc = func.pyfunc
+    if pyfunc is not None:
+        return pyfunc(*args)
+    if func.countdown:
+        func.countdown -= 1
+        if not func.countdown and func.tier_up():
+            return func.pyfunc(*args)
     code = func.code
     if code is None:
         code = func.compile()
@@ -388,9 +395,7 @@ def execute(func: WasmFunction, args: list) -> Any:
 
 def invoke(func: WasmFunction | HostFunction, args: list) -> Any:
     """Call any function object with a list of internal values."""
-    if type(func) is WasmFunction:
-        return execute(func, args)
-    return func.call(args)
+    return func.entry(*args)
 
 
 def call_with_python_values(func: WasmFunction | HostFunction, args: tuple) -> Any:
@@ -481,6 +486,10 @@ class Instance:
         self.elements: list[list] = []
         self.datas: list[bytes] = []
         self.limits: Limits | None = None
+        self.mode = DEFAULT_MODE
+        # (function index, exception) for functions that could not be
+        # compiled to Python and stay in the interpreter
+        self.compile_errors: list = []
         self.exports = ExportNamespace(self)
 
     @property
@@ -578,11 +587,22 @@ def _import_global(value: Any, imp: Any) -> GlobalInstance:
     return GlobalInstance(gtype, FROM_PYTHON[gtype.valtype](value))
 
 
+# How functions run:
+# - "interpret": always in the interpreter
+# - "compile": compiled to Python source on their first call
+# - "auto": interpreted at first, compiled to Python once called
+#   AUTO_THRESHOLD times (code that only runs once is not worth compiling)
+MODES = ("interpret", "compile", "auto")
+DEFAULT_MODE = "auto"
+AUTO_THRESHOLD = 2
+
+
 def instantiate(
     module: Module,
     imports: dict[str, dict[str, Any]] | None = None,
     *,
     limits: Limits | None = None,
+    mode: str | None = None,
 ) -> Instance:
     """Create an instance from a module.
 
@@ -590,13 +610,20 @@ def instantiate(
         module: The decoded module to instantiate
         imports: Optional import object mapping module -> name -> value
         limits: Optional resource limits (fuel, deadline, memory cap)
+        mode: "interpret", "compile" or "auto" (see MODES; default
+            DEFAULT_MODE)
 
     Returns:
         An Instance ready for execution
     """
     imports = imports or {}
+    mode = mode or DEFAULT_MODE
+    if mode not in MODES:
+        raise ValueError(f"mode must be one of {MODES}, not {mode!r}")
+    countdown = {"interpret": 0, "compile": 1, "auto": AUTO_THRESHOLD}[mode]
     instance = Instance(module)
     instance.limits = limits
+    instance.mode = mode
 
     # Imports come first in each index space
     for imp in module.imports:
@@ -616,11 +643,11 @@ def instantiate(
 
     n_imported = len(instance.functions)
     for index, func in enumerate(module.funcs):
-        instance.functions.append(
-            WasmFunction(
-                module.types[func.type_idx], instance, func, n_imported + index
-            )
+        wfunc = WasmFunction(
+            module.types[func.type_idx], instance, func, n_imported + index
         )
+        wfunc.countdown = countdown
+        instance.functions.append(wfunc)
 
     for table in module.tables:
         instance.tables.append(

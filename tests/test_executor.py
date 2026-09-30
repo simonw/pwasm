@@ -5,6 +5,8 @@ from pwasm import decode_module
 from pwasm.executor import instantiate, Instance
 from pwasm.errors import TrapError
 
+pytestmark = pytest.mark.usefixtures("each_mode")
+
 
 def make_simple_func(name: str, instr_bytes: bytes, num_params: int = 2) -> bytes:
     """Helper to create a simple module with one exported function.
@@ -665,7 +667,7 @@ class TestCompiledRepresentation:
 
     def test_compiled_on_first_call(self):
         wasm = make_simple_func("add", bytes([0x20, 0x00, 0x20, 0x01, 0x6A, 0x0B]))
-        instance = instantiate(decode_module(wasm))
+        instance = instantiate(decode_module(wasm), mode="interpret")
         func = instance.functions[0]
         assert func.code is None
         assert instance.exports.add(1, 2) == 3
@@ -678,7 +680,7 @@ class TestCompiledRepresentation:
             bytes([0x02, 0x40, 0x03, 0x40, 0x01, 0x0B, 0x0B, 0x20, 0x00, 0x0B]),
             num_params=1,
         )
-        instance = instantiate(decode_module(wasm))
+        instance = instantiate(decode_module(wasm), mode="interpret")
         assert instance.exports.f(7) == 7
         code = instance.functions[0].code
         # just local.get and the final return
@@ -687,7 +689,7 @@ class TestCompiledRepresentation:
 
     def test_compiled_opcodes_are_integers(self):
         wasm = make_simple_func("add", bytes([0x20, 0x00, 0x20, 0x01, 0x6A, 0x0B]))
-        instance = instantiate(decode_module(wasm))
+        instance = instantiate(decode_module(wasm), mode="interpret")
         instance.exports.add(1, 2)
         for op in instance.functions[0].code.ops:
             assert isinstance(op, int)

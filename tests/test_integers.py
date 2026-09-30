@@ -6,6 +6,8 @@ import pytest
 
 from differential import Pair
 
+pytestmark = pytest.mark.usefixtures("each_mode")
+
 I32_VALUES = [
     0,
     1,
@@ -109,12 +111,12 @@ def module_for(t: str) -> str:
 
 
 @pytest.fixture(scope="module")
-def i32():
+def i32(each_mode):
     return Pair(module_for("i32"))
 
 
 @pytest.fixture(scope="module")
-def i64():
+def i64(each_mode):
     return Pair(module_for("i64"))
 
 
@@ -143,7 +145,7 @@ def test_i64_unary(i64, op):
 
 
 @pytest.fixture(scope="module")
-def conversions():
+def conversions(each_mode):
     return Pair(
         """(module
       (func (export "wrap") (param i64) (result i32) (i32.wrap_i64 (local.get 0)))
