@@ -343,7 +343,7 @@ def execute(func: WasmFunction, args: list) -> Any:
                     raise TrapError("undefined element")
                 f = elements[i]
                 if f is None:
-                    raise TrapError("uninitialized element")
+                    raise TrapError(f"uninitialized element {i}")
                 if f.type is not ftype and f.type != ftype:
                     raise TrapError("indirect call type mismatch")
                 n = f.n_params

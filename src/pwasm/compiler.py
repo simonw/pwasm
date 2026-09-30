@@ -342,10 +342,46 @@ def _misc(name: str, arg: Any, instance: Any) -> tuple[Any, int, int]:
             return (lambda init, n: table.grow(n, init) & MASK_32), 2, 1
         if name == "table.fill":
             return table.fill, 3, 0
+    if name in ("memory.fill", "memory.copy", "memory.init"):
+        mem = instance.memories[0].data
+        if name == "memory.fill":
+
+            def memory_fill(d: int, value: int, n: int) -> None:
+                if d + n > len(mem):
+                    raise TrapError("out of bounds memory access")
+                mem[d : d + n] = bytes((value & 0xFF,)) * n
+
+            return memory_fill, 3, 0
+        if name == "memory.copy":
+
+            def memory_copy(d: int, s: int, n: int) -> None:
+                if s + n > len(mem) or d + n > len(mem):
+                    raise TrapError("out of bounds memory access")
+                mem[d : d + n] = mem[s : s + n]
+
+            return memory_copy, 3, 0
+
+        def memory_init(d: int, s: int, n: int) -> None:
+            data = instance.datas[arg]
+            if s + n > len(data) or d + n > len(mem):
+                raise TrapError("out of bounds memory access")
+            mem[d : d + n] = data[s : s + n]
+
+        return memory_init, 3, 0
+    if name == "data.drop":
+
+        def data_drop() -> None:
+            instance.datas[arg] = b""
+
+        return data_drop, 0, 0
     raise WasmError(f"Unsupported instruction: {name}")
 
 
 MISC_INSTRUCTIONS = {
+    "memory.fill",
+    "memory.copy",
+    "memory.init",
+    "data.drop",
     "table.get",
     "table.set",
     "table.size",

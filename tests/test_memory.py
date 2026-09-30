@@ -110,3 +110,44 @@ def test_memory_size_and_grow(m):
     assert m.grow(2) == -1  # max is 3 pages
     assert m.grow(1) == 2
     assert m.size() == 3
+
+
+BULK = """(module
+  (memory (export "memory") 1)
+  (data $d "hello world")
+  (func (export "fill") (param i32 i32 i32) (memory.fill (local.get 0) (local.get 1) (local.get 2)))
+  (func (export "copy") (param i32 i32 i32) (memory.copy (local.get 0) (local.get 1) (local.get 2)))
+  (func (export "init") (param i32 i32 i32) (memory.init $d (local.get 0) (local.get 1) (local.get 2)))
+  (func (export "drop") (data.drop $d)))"""
+
+
+def test_memory_fill():
+    e = load(BULK).exports
+    e.fill(10, 0x1AB, 4)
+    assert bytes(e.memory.data[9:15]) == b"\x00\xab\xab\xab\xab\x00"
+    with pytest.raises(TrapError, match="out of bounds memory access"):
+        e.fill(65535, 0, 2)
+    e.fill(65536, 0, 0)  # zero-length at the end is fine
+
+
+def test_memory_copy_handles_overlap():
+    e = load(BULK).exports
+    e.memory.data[0:6] = b"abcdef"
+    e.copy(2, 0, 4)
+    assert bytes(e.memory.data[0:6]) == b"ababcd"
+    e.copy(0, 2, 4)
+    assert bytes(e.memory.data[0:6]) == b"abcdcd"
+    with pytest.raises(TrapError, match="out of bounds memory access"):
+        e.copy(0, 65534, 4)
+
+
+def test_memory_init_and_data_drop():
+    e = load(BULK).exports
+    e.init(100, 6, 5)
+    assert bytes(e.memory.data[100:105]) == b"world"
+    with pytest.raises(TrapError, match="out of bounds memory access"):
+        e.init(0, 8, 5)
+    e.drop()
+    e.init(0, 0, 0)
+    with pytest.raises(TrapError, match="out of bounds memory access"):
+        e.init(0, 0, 1)

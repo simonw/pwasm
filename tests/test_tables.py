@@ -120,3 +120,9 @@ def test_typed_select_with_references():
       (elem declare func 0))""")
     assert inst.exports.f(1) == 1
     assert inst.exports.f(0) == 0
+
+
+def test_uninitialized_element_trap_names_the_index():
+    inst = load(DISPATCH)
+    with pytest.raises(TrapError, match="uninitialized element 3"):
+        inst.exports.binop(3, 1, 1)

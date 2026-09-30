@@ -13,16 +13,12 @@ from spec_runner import run_wast
 SPEC_DIR = Path(__file__).parent / "spec"
 
 KNOWN_FAILURES = {
-    "bulk",
     "data",
     "elem",
     "global",
     "imports",
     "linking",
-    "memory_copy",
-    "memory_fill",
     "memory_grow",
-    "memory_init",
     "table",
     "table_grow",
 }
