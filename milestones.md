@@ -63,7 +63,7 @@
 - [x] Execute `br` (unconditional branch)
 - [x] Execute `br_if` (conditional branch)
 - [x] Execute `br_table` (branch table)
-- [ ] Handle multi-value block results
+- [x] Handle multi-value block results
 
 ## Milestone 5: i64 and Integer Conversions
 *Goal: Complete integer support*
@@ -128,8 +128,8 @@
 ## Milestone 10: Imports and Exports
 *Goal: Module linking and Python interop*
 
-- [ ] Implement import resolution (parsing works, resolution not implemented)
-- [ ] Support imported functions (Python callables)
+- [x] Implement import resolution
+- [x] Support imported functions (Python callables)
 - [ ] Support imported memories
 - [ ] Support imported globals
 - [ ] Support imported tables

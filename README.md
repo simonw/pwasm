@@ -72,6 +72,27 @@ print(instance.exports.sub(50, 8))        # 42
 print(instance.exports.mul(6, 7))         # 42
 ```
 
+### Importing Python Functions
+
+Functions a module imports can be supplied as Python callables, grouped by module name:
+
+```python
+from pwasm import decode_module, instantiate
+
+def log(value):
+    print("wasm says", value)
+
+instance = instantiate(module, {"env": {"log": log}})
+```
+
+Host functions receive i32 and i64 arguments as signed Python integers and floats for f32 and f64. They can return `None`, a single value, or a tuple for functions with multiple results. Exceptions raised by a host function propagate out through the WebAssembly code to the Python caller.
+
+An exported function from one instance can be imported by another:
+
+```python
+app = instantiate(app_module, {"lib": {"square": lib.exports.square}})
+```
+
 ### Error Handling
 
 ```python

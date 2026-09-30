@@ -403,6 +403,28 @@ def _eval_const(instance: Instance, expr: list[Instruction]) -> Any:
     return stack[-1]
 
 
+def _lookup_import(imports: dict, module_name: str, name: str) -> Any:
+    try:
+        return imports[module_name][name]
+    except (KeyError, TypeError):
+        raise LinkError(f"unknown import {module_name}.{name}") from None
+
+
+def _import_function(value: Any, ftype: Any, imp: Any) -> WasmFunction | HostFunction:
+    if isinstance(value, ExportedFunction):
+        value = value.func
+    if isinstance(value, (WasmFunction, HostFunction)):
+        if value.type != ftype:
+            raise LinkError(
+                f"incompatible import type for {imp.module}.{imp.name}: "
+                f"expected {ftype}, got {value.type}"
+            )
+        return value
+    if callable(value):
+        return HostFunction(ftype, value)
+    raise LinkError(f"import {imp.module}.{imp.name} is not callable")
+
+
 def instantiate(
     module: Module, imports: dict[str, dict[str, Any]] | None = None
 ) -> Instance:
@@ -415,14 +437,25 @@ def instantiate(
     Returns:
         An Instance ready for execution
     """
-    if module.imports:
-        raise LinkError("Imports are not supported yet")
-
+    imports = imports or {}
     instance = Instance(module)
 
+    # Imports come first in each index space
+    for imp in module.imports:
+        value = _lookup_import(imports, imp.module, imp.name)
+        if imp.kind == "func":
+            instance.functions.append(
+                _import_function(value, module.types[imp.desc], imp)
+            )
+        else:
+            raise LinkError(f"Importing a {imp.kind} is not supported yet")
+
+    n_imported = len(instance.functions)
     for index, func in enumerate(module.funcs):
         instance.functions.append(
-            WasmFunction(module.types[func.type_idx], instance, func, index)
+            WasmFunction(
+                module.types[func.type_idx], instance, func, n_imported + index
+            )
         )
 
     for mem in module.mems:
