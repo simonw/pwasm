@@ -81,6 +81,7 @@ class V:
         "boolean",
         "const",
         "wrap",
+        "bound",
     )
 
     def __init__(
@@ -95,6 +96,7 @@ class V:
         boolean: bool = False,
         const: Any = None,
         wrap: tuple[str, int] | None = None,
+        bound: int | None = None,
     ) -> None:
         self.expr = expr
         self.type = type
@@ -115,6 +117,9 @@ class V:
         # (x, d): the expression is x + d, for a masked simple x and a small
         # constant d, so masking can be a test instead of an `&`
         self.wrap = wrap
+        # an upper bound on the (masked, so non-negative) value, if smaller
+        # than the type allows: such values need no masking when combined
+        self.bound = bound
 
 
 def op(v: V) -> str:
@@ -134,6 +139,33 @@ def masked(v: V) -> str:
             return f"{x} + {d} if {x} < {full - d} else {x} - {full - d}"
         return f"{x} - {-d} if {x} >= {-d} else {x} + {full + d}"
     return f"{op(v)} & {MASKS[v.type]}"
+
+
+FULL = {"i32": MASK_32, "i64": MASK_64}
+
+
+def bound_of(v: V) -> int | None:
+    """The largest value an integer can have, or None if it is not masked
+    (so it might be negative or too large)."""
+    if v.const is not None:
+        return v.const
+    if v.bound is not None:
+        return v.bound
+    if v.boolean:
+        return 1
+    if v.masked and v.type in FULL:
+        return FULL[v.type]
+    return None
+
+
+def bounds_max(a: V, b: V, bits: bool = False) -> int | None:
+    """A bound on a value that is one of a and b (bits=False), or made of
+    their bits (bits=True: or, xor)."""
+    ba, bb = bound_of(a), bound_of(b)
+    if ba is None or bb is None:
+        return None
+    top = max(ba, bb)
+    return (1 << top.bit_length()) - 1 if bits else top
 
 
 def masked_op(v: V) -> str:
@@ -340,6 +372,15 @@ VIEW_LOADS = {
     "f64.load": ("_MD", 8),
 }
 
+# loads of unsigned values narrower than their type
+LOAD_BOUNDS = {
+    "i32.load8_u": 0xFF,
+    "i32.load16_u": 0xFFFF,
+    "i64.load8_u": 0xFF,
+    "i64.load16_u": 0xFFFF,
+    "i64.load32_u": MASK_32,
+}
+
 # memoryviews use the machine's byte order
 USE_VIEWS = sys.byteorder == "little"
 
@@ -453,6 +494,8 @@ class Translator:
         self.dead = False
         self.labels: list[Label] = []
         self.uses_flag = False
+        # upper bounds of locals set in the current straight-line code
+        self.local_bounds: dict[int, int] = {}
         # state machine
         self.npc = 0
         self.blocks: list[tuple[int, list]] = []
@@ -488,7 +531,15 @@ class Translator:
             return v
         t = self.new_tmp()
         self.emit(f"{t} = {v.expr}")
-        return V(t, v.type, v.masked, simple=True, stable=True, boolean=v.boolean)
+        return V(
+            t,
+            v.type,
+            v.masked,
+            simple=True,
+            stable=True,
+            boolean=v.boolean,
+            bound=v.bound,
+        )
 
     def push(self, v: V) -> None:
         if len(v.expr) > MAX_EXPR:
@@ -503,13 +554,18 @@ class Translator:
         masked: bool = True,
         boolean: bool = False,
         wrap: tuple[str, int] | None = None,
+        bound: int | None = None,
     ) -> None:
         deps = _EMPTY
         gread = False
         for o in operands:
             deps = deps | o.deps
             gread = gread or o.gread
-        self.push(V(expr, type, masked, deps, gread, boolean=boolean, wrap=wrap))
+        if bound is not None and bound >= FULL[type]:
+            bound = None
+        self.push(
+            V(expr, type, masked, deps, gread, boolean=boolean, wrap=wrap, bound=bound)
+        )
 
     def push_stmt(self, expr: str, type: str, masked: bool = True) -> None:
         """Evaluate expr now (it may trap or have side effects)."""
@@ -675,6 +731,9 @@ class Translator:
                     continue
             if ip in chain_rest:
                 continue  # opened with the first block of its chain
+            if name in ("loop", "else", "end"):
+                # other paths join here, with locals bounded differently
+                self.local_bounds.clear()
             handler = self.HANDLERS.get(name)
             if handler is not None:
                 handler(self, name, arg)
@@ -707,7 +766,13 @@ class Translator:
 
     def i_local_get(self, name: str, n: int) -> None:
         self.stack.append(
-            V(f"l{n}", self.local_types[n], deps=frozenset((n,)), simple=True)
+            V(
+                f"l{n}",
+                self.local_types[n],
+                deps=frozenset((n,)),
+                simple=True,
+                bound=self.local_bounds.get(n),
+            )
         )
 
     def i_local_set(self, name: str, n: int) -> None:
@@ -716,6 +781,11 @@ class Translator:
         value = masked(v)
         if value != f"l{n}":
             self.emit(f"l{n} = {value}")
+        bound = bound_of(v) if v.type in FULL else None
+        if bound is not None and bound < FULL[v.type]:
+            self.local_bounds[n] = bound
+        else:
+            self.local_bounds.pop(n, None)
         if name == "local.tee":
             self.i_local_get(name, n)
 
@@ -745,34 +815,51 @@ class Translator:
             (a, b, c),
             masked=a.masked and b.masked,
             boolean=a.boolean and b.boolean,
+            bound=bounds_max(a, b),
         )
 
     def i_int_binary(self, name: str, arg: Any) -> None:
         t, operation = name.split(".")
         b = self.pop()
         a = self.pop()
-        mask = MASKS[t]
         sign = SIGNS[t]
+        full = FULL[t]
         shift_mask = BITS[t] - 1
+        ba, bb = bound_of(a), bound_of(b)
         if operation in ("add", "sub", "mul"):
             symbol = {"add": "+", "sub": "-", "mul": "*"}[operation]
             if a.const is not None and b.const is not None:
-                value = eval(f"{a.const} {symbol} {b.const}") & (
-                    MASK_32 if t == "i32" else MASK_64
-                )
+                value = eval(f"{a.const} {symbol} {b.const}") & full
                 self.stack.append(
                     V(str(value), t, simple=True, stable=True, const=value)
                 )
                 return
+            if ba is not None and bb is not None and operation != "sub":
+                result = ba + bb if operation == "add" else ba * bb
+                if result <= full:  # cannot overflow
+                    expr = f"{op(a)} {symbol} {op(b)}"
+                    self.push_expr(expr, t, (a, b), bound=result)
+                    return
             if operation != "mul" and self.add_constant(operation, a, b):
                 return
             self.push_expr(f"{op(a)} {symbol} {op(b)}", t, (a, b), masked=False)
         elif operation == "and":
-            self.push_expr(f"{op(a)} & {op(b)}", t, (a, b), masked=a.masked or b.masked)
+            known = [x for x in (ba, bb) if x is not None]
+            self.push_expr(
+                f"{op(a)} & {op(b)}",
+                t,
+                (a, b),
+                masked=bool(known),
+                bound=min(known) if known else None,
+            )
         elif operation in ("or", "xor"):
             symbol = "|" if operation == "or" else "^"
             self.push_expr(
-                f"{op(a)} {symbol} {op(b)}", t, (a, b), masked=a.masked and b.masked
+                f"{op(a)} {symbol} {op(b)}",
+                t,
+                (a, b),
+                masked=a.masked and b.masked,
+                bound=bounds_max(a, b, bits=True),
             )
         elif operation in ("shl", "shr_u", "shr_s"):
             amount = (
@@ -780,10 +867,21 @@ class Translator:
                 if b.const is not None
                 else f"{op(b)} & {shift_mask}"
             )
+            known = b.const & shift_mask if b.const is not None else None
             if operation == "shl":
-                self.push_expr(f"{op(a)} << ({amount})", t, (a, b), masked=False)
-            elif operation == "shr_u":
-                self.push_expr(f"{masked_op(a)} >> ({amount})", t, (a, b))
+                if ba is not None and known is not None and ba << known <= full:
+                    expr = f"{op(a)} << ({amount})"
+                    self.push_expr(expr, t, (a, b), bound=ba << known)
+                else:
+                    expr = f"{op(a)} << ({amount})"
+                    self.push_expr(expr, t, (a, b), masked=False)
+                return
+            top = full if ba is None else ba
+            bound = top >> known if known is not None else top
+            if operation == "shr_u" or top < sign:
+                # a non-negative value shifts the same either way
+                expr = f"{masked_op(a)} >> ({amount})"
+                self.push_expr(expr, t, (a, b), bound=bound)
             else:
                 self.push_expr(
                     f"(({masked_op(a)} ^ {sign}) - {sign}) >> ({amount})",
@@ -800,7 +898,9 @@ class Translator:
             )
         elif operation[:2] in ("lt", "gt", "le", "ge"):
             symbol = COMPARE[operation[:2]]
-            if operation.endswith("_u"):
+            unsigned = operation.endswith("_u")
+            if unsigned or (ba is not None and bb is not None and max(ba, bb) < sign):
+                # (non-negative values compare the same signed or unsigned)
                 self.push_expr(
                     f"{masked_op(a)} {symbol} {masked_op(b)}",
                     "i32",
@@ -820,13 +920,15 @@ class Translator:
                 )
                 self.push_expr(f"{left} {symbol} {right}", "i32", (a, b), boolean=True)
         elif operation in ("div_s", "div_u", "rem_s", "rem_u"):
-            full = MASK_32 if t == "i32" else MASK_64
+            top = full if ba is None else ba
             if b.const:  # cannot divide by zero
                 if operation == "div_u":
-                    self.push_expr(f"{masked_op(a)} // {b.const}", t, (a,))
+                    expr = f"{masked_op(a)} // {b.const}"
+                    self.push_expr(expr, t, (a,), bound=top // b.const)
                     return
                 if operation == "rem_u":
-                    self.push_expr(f"{masked_op(a)} % {b.const}", t, (a,))
+                    expr = f"{masked_op(a)} % {b.const}"
+                    self.push_expr(expr, t, (a,), bound=min(top, b.const - 1))
                     return
                 if b.const != full:  # and cannot overflow (x / -1)
                     self.push_expr(f"{t}_{operation}({masked(a)}, {b.const})", t, (a,))
@@ -851,8 +953,11 @@ class Translator:
         d = (c if operation == "add" else -c) % full
         if d >= full // 2:
             d -= full
+        bound = x.bound
         if d == 0:
             self.stack.append(x)
+        elif d > 0 and bound is not None and bound + d < full:
+            self.push_expr(f"{x.expr} + {d}", x.type, (x,), bound=bound + d)
         else:
             expr = f"{x.expr} + {d}" if d > 0 else f"{x.expr} - {-d}"
             self.push_expr(expr, x.type, (x,), masked=False, wrap=(x.expr, d))
@@ -870,16 +975,41 @@ class Translator:
             bits = int(operation[6:-2])
             low = (1 << bits) - 1
             top = 1 << (bits - 1)
+            ba = bound_of(a)
+            if ba is not None and ba < top:  # the sign bit is clear
+                self.stack.append(a)
+                return
             self.push_expr(
                 f"(({op(a)} & {low:#x}) ^ {top:#x}) - {top:#x}", t, (a,), masked=False
             )
         elif name == "i32.wrap_i64":
+            ba = bound_of(a)
+            if ba is not None and ba <= MASK_32:
+                bound = ba if ba < MASK_32 else None
+                self.stack.append(
+                    V(
+                        a.expr,
+                        "i32",
+                        True,
+                        a.deps,
+                        a.gread,
+                        a.simple,
+                        a.stable,
+                        bound=bound,
+                    )
+                )
+                return
             self.stack.append(
                 V(a.expr, "i32", False, a.deps, a.gread, a.simple, a.stable)
             )
         elif name == "i64.extend_i32_u":
-            self.push_expr(masked(a), "i64", (a,))
+            ba = bound_of(a)
+            self.push_expr(masked(a), "i64", (a,), bound=MASK_32 if ba is None else ba)
         elif name == "i64.extend_i32_s":
+            ba = bound_of(a)
+            if ba is not None and ba < 0x80000000:
+                self.push_expr(masked(a), "i64", (a,), bound=ba)
+                return
             self.push_expr(
                 f"({masked_op(a)} ^ 0x80000000) - 0x80000000", "i64", (a,), masked=False
             )
@@ -889,7 +1019,9 @@ class Translator:
     def i_unary_call(self, name: str, arg: Any) -> None:
         a = self.pop()
         type, function = UNARY_CALLS[name]
-        self.push_expr(f"{function}({masked(a)})", type, (a,))
+        # clz, ctz and popcnt count bits
+        bound = BITS[type] if name.endswith(("clz", "ctz", "popcnt")) else None
+        self.push_expr(f"{function}({masked(a)})", type, (a,), bound=bound)
 
     def i_trapping_unary(self, name: str, arg: Any) -> None:
         a = self.pop()
@@ -933,6 +1065,12 @@ class Translator:
         return masked(addr)
 
     def i_load(self, name: str, arg: Any) -> None:
+        self.load(name, arg)
+        bound = LOAD_BOUNDS.get(name)
+        if bound is not None:
+            self.stack[-1].bound = bound
+
+    def load(self, name: str, arg: Any) -> None:
         addr = self.pop()
         type, template = LOADS[name]
         offset = arg[1]

@@ -402,6 +402,103 @@ def test_only_locals_read_before_being_set_are_initialized():
     assert "l5" not in prologue
 
 
+BOUNDED = """(module (memory 1) (data (i32.const 0) "\\ff\\10\\80")
+  (func (export "index") (param i32) (result i32)
+    ;; a byte times 4 plus a constant cannot overflow
+    (i32.add (i32.shl (i32.load8_u (local.get 0)) (i32.const 2)) (i32.const 1000)))
+  (func (export "twice") (param i32) (result i32) (local i32)
+    (local.set 1 (i32.load8_u (local.get 0)))
+    (i32.add (local.get 1) (local.get 1)))
+  (func (export "small") (param i32) (result i32)
+    (i32.lt_s (i32.load8_u (local.get 0)) (i32.const 200)))
+  (func (export "merge") (param i32) (result i32) (local i32)
+    ;; after the if, local 1 may be large
+    (if (local.get 0)
+      (then (local.set 1 (i32.load8_u (i32.const 0))))
+      (else (local.set 1 (i32.const -1))))
+    (i32.add (local.get 1) (local.get 1)))
+  (func (export "grow") (param i32) (result i32) (local i32)
+    ;; around the loop, local 1 is not a byte any more
+    (local.set 1 (i32.load8_u (i32.const 0)))
+    (loop $l
+      (local.set 1 (i32.add (local.get 1) (local.get 1)))
+      (local.set 0 (i32.sub (local.get 0) (i32.const 1)))
+      (br_if $l (local.get 0)))
+    (local.get 1)))"""
+
+
+def test_values_known_to_be_small_are_not_masked():
+    inst = load(BOUNDED)
+    assert inst.exports.index(1) == 0x10 * 4 + 1000
+    assert inst.exports.twice(0) == 0x1FE
+    assert inst.exports.small(0) == 0 and inst.exports.small(1) == 1
+    assert inst.exports.merge(1) == 0x1FE and inst.exports.merge(0) == -2
+    assert inst.exports.grow(30) == -0x40000000  # 0xFF << 30, wrapped
+    sources = [python_source(f).split("    except")[0] for f in inst.functions]
+    assert "0xFFFFFFFF" not in sources[0] and " if " not in sources[0]
+    assert "0xFFFFFFFF" not in sources[1]
+    assert "2147483648" not in sources[2]  # a signed comparison, unsigned
+    assert "0xFFFFFFFF" in sources[3]
+    assert "0xFFFFFFFF" in sources[4]
+
+
+BOUNDED_OPERANDS = [
+    "(i32.and (local.get 0) (i32.const 0xFF))",
+    "(i32.and (local.get 0) (i32.const 0x7FFFFFFF))",
+    "(i32.shr_u (local.get 0) (i32.const 1))",
+    "(i32.load8_u (i32.and (local.get 0) (i32.const 3)))",
+    "(i32.load16_u (i32.and (local.get 0) (i32.const 3)))",
+    "(i32.const 0x7FFFFFFF)",
+    "(i32.lt_u (local.get 0) (i32.const 5))",
+    "(local.get 0)",
+]
+BOUNDED_BINARY = "add sub mul and or xor shl shr_u shr_s rotl lt_s le_s gt_s ge_s lt_u eq div_u rem_u"
+BOUNDED_UNARY = [
+    "(i32.extend8_s {})",
+    "(i32.extend16_s {})",
+    "(i32.eqz {})",
+    "(i32.wrap_i64 (i64.extend_i32_u {}))",
+    "(i32.wrap_i64 (i64.extend_i32_s {}))",
+    "(i32.wrap_i64 (i64.shr_s (i64.extend_i32_u {}) (i64.const 1)))",
+    "(i32.wrap_i64 (i64.extend32_s (i64.extend_i32_u {})))",
+    "(i32.clz {})",
+    "(select {} (i32.const 3) (local.get 1))",
+]
+EDGES = [0, 1, 2, 3, 5, 0x7F, 0x80, 0xFF, 0x7FFFFFFF, -0x80000000, -2, -1]
+
+
+def test_bounded_values_compute_the_same_results():
+    funcs = []
+    for a in BOUNDED_OPERANDS:
+        for b in BOUNDED_OPERANDS:
+            for operation in BOUNDED_BINARY.split():
+                if operation in ("div_u", "rem_u"):
+                    divisor = f"(i32.or {b.replace('local.get 0', 'local.get 1')} (i32.const 1))"
+                    funcs.append(f"(i32.{operation} {a} {divisor})")
+                else:
+                    funcs.append(
+                        f"(i32.{operation} {a} {b.replace('local.get 0', 'local.get 1')})"
+                    )
+        for template in BOUNDED_UNARY:
+            funcs.append(template.format(a))
+    text = (
+        '(module (memory 1) (data (i32.const 0) "\\ff\\80\\7f\\01")'
+        + "".join(
+            f'(func (export "f{j}") (param i32 i32) (result i32) {body})'
+            for j, body in enumerate(funcs)
+        )
+        + ")"
+    )
+    module = decode_module(wat2wasm(text))
+    expected = instantiate(module, mode="interpret").exports
+    actual = instantiate(module, mode="compile").exports
+    for j, body in enumerate(funcs):
+        for x in EDGES:
+            for y in (0, 1, 0x80, -1):
+                want = getattr(expected, f"f{j}")(x, y)
+                assert getattr(actual, f"f{j}")(x, y) == want, (body, x, y)
+
+
 def test_deeply_nested_loops_use_a_state_machine():
     inst = load(nested_loops_module(25))
     assert inst.exports.f(10) == 10
