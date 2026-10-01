@@ -499,6 +499,15 @@ def test_bounded_values_compute_the_same_results():
                 assert getattr(actual, f"f{j}")(x, y) == want, (body, x, y)
 
 
+def test_float_constants_stay_floats():
+    # PyPy folds the literal -9.223372036854775808e18 (-2**63) to an int
+    inst = load("""(module
+      (func (export "f") (result f64) (f64.const -0x1p63))
+      (func (export "g") (result f32) (f32.const -0x1p63)))""")
+    for f in (inst.exports.f, inst.exports.g):
+        assert type(f()) is float and f() == -(2.0**63)
+
+
 def test_deeply_nested_loops_use_a_state_machine():
     inst = load(nested_loops_module(25))
     assert inst.exports.f(10) == 10

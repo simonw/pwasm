@@ -340,6 +340,9 @@ def _float_literal(value: float, type: str) -> str:
         return "_INF"
     if value == -math.inf:
         return "_NINF"
+    if value == -(2.0**63):
+        # PyPy's compiler folds the literal -9.223372036854775808e+18 to an int
+        return "(0.0 - 9.223372036854775808e+18)"
     return repr(float(value))
 
 
