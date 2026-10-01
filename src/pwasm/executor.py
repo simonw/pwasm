@@ -405,6 +405,20 @@ def call_with_python_values(func: WasmFunction | HostFunction, args: tuple) -> A
     return ExportedFunction(func)(*args)
 
 
+def is_stack_exhaustion(error: BaseException) -> bool:
+    """Whether an exception means Python ran out of stack: a RecursionError,
+    or the TypeError PyPy can raise instead while unwinding from one
+    ("couldn't record exception context for exception 'RecursionError'")."""
+    if isinstance(error, RecursionError):
+        return True
+    message = str(error)
+    return (
+        isinstance(error, TypeError)
+        and "record exception context" in message
+        and "RecursionError" in message
+    )
+
+
 class ExportedFunction:
     """A callable for an exported function: converts Python arguments to
     internal values and results back (i32/i64 results are signed ints;
@@ -427,7 +441,9 @@ class ExportedFunction:
         values = [conv(v) for conv, v in zip(self._in, args)]
         try:
             result = invoke(self.func, values)
-        except RecursionError:
+        except (RecursionError, TypeError) as e:
+            if not is_stack_exhaustion(e):
+                raise
             raise TrapError("call stack exhausted") from None
         out = self._out
         if not out:

@@ -21,7 +21,7 @@ import wasmtime
 
 from pwasm import decode_module
 from pwasm.errors import DecodeError, LinkError, TrapError, WasmError
-from pwasm.executor import instantiate, invoke
+from pwasm.executor import instantiate, invoke, is_stack_exhaustion
 from pwasm.numeric import f32_from_bits, f32_to_bits
 from pwasm.runtime import GlobalInstance, HostFunction, MemoryInstance
 from pwasm.types import FuncType, GlobalType
@@ -454,7 +454,9 @@ class Runner:
                     self.fail(expr, f"trapped with {str(e)!r}, expected {message!r}")
                 else:
                     self.result.passed += 1
-            except RecursionError:
+            except (RecursionError, TypeError) as e:
+                if not is_stack_exhaustion(e):
+                    raise
                 if head == "assert_exhaustion":
                     self.result.passed += 1
                 else:

@@ -195,3 +195,29 @@ def test_deep_recursion_traps_as_call_stack_exhausted():
       (i32.add (call $f (local.get 0)) (i32.const 1))))""")
     with pytest.raises(TrapError, match="call stack exhausted"):
         inst.exports.f(0)
+
+
+PYPY_EXHAUSTION = TypeError(
+    "couldn't record exception context for exception 'RecursionError', "
+    "got: RecursionError('maximum recursion depth exceeded')"
+)
+
+
+@pytest.mark.parametrize(
+    "error,expected",
+    [(PYPY_EXHAUSTION, TrapError), (TypeError("a host bug"), TypeError)],
+)
+def test_pypy_running_out_of_stack_traps_as_call_stack_exhausted(error, expected):
+    # PyPy can report running out of stack while unwinding as this TypeError
+    def fail():
+        raise error
+
+    inst = load(
+        """(module (import "env" "fail" (func $fail))
+          (func (export "f") (call $fail)))""",
+        {"env": {"fail": fail}},
+    )
+    with pytest.raises(expected) as info:
+        inst.exports.f()
+    if expected is TrapError:
+        assert "call stack exhausted" in str(info.value)
