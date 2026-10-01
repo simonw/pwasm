@@ -9,6 +9,7 @@ host functions propagate through WebAssembly frames unchanged.
 from __future__ import annotations
 
 import struct
+import sys
 from typing import Any, Callable
 
 from .compiler import (
@@ -596,6 +597,12 @@ def _import_global(value: Any, imp: Any) -> GlobalInstance:
 MODES = ("interpret", "compile", "auto")
 DEFAULT_MODE = "auto"
 AUTO_THRESHOLD = 2
+# In "auto" mode, functions with more instructions than this stay in the
+# interpreter. PyPy's JIT copes badly with huge generated functions: the
+# compiled interpreter loops of QuickJS and Micro QuickJS ran 10-15 times
+# slower there than interpreted (MicroPython's, at 6,853 instructions, ran
+# twice as fast compiled).
+AUTO_MAX_SIZE: int | None = 8000 if sys.implementation.name == "pypy" else None
 
 
 def instantiate(
@@ -648,10 +655,13 @@ def instantiate(
             module.types[func.type_idx], instance, func, n_imported + index
         )
         wfunc.countdown = countdown
-        # Python code another instance already compiled is worth switching
-        # to on the first call
-        if mode == "auto" and is_cached(module, wfunc.index, limits is not None):
-            wfunc.countdown = 1
+        if mode == "auto":
+            if AUTO_MAX_SIZE is not None and len(func.body) > AUTO_MAX_SIZE:
+                wfunc.countdown = 0
+            # Python code another instance already compiled is worth
+            # switching to on the first call
+            elif is_cached(module, wfunc.index, limits is not None):
+                wfunc.countdown = 1
         instance.functions.append(wfunc)
 
     for table in module.tables:

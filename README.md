@@ -237,7 +237,7 @@ Rough timings on CPython 3.11 (`benchmarks/guests.py`):
 | Recursive `fib(15)` | 105 ms | 90 ms | 40 ms |
 | 1,000 iteration loop | 50 ms | 30 ms | 15 ms |
 
-Guests compile their busiest functions to Python as they run (see [Compiling to Python](#compiling-to-python)), so the first run of new code also pays to compile what it uses. pwasm runs well on [PyPy](https://pypy.org/), which is several times faster once warmed up.
+Guests compile their busiest functions to Python as they run (see [Compiling to Python](#compiling-to-python)), so the first run of new code also pays to compile what it uses. pwasm also runs on [PyPy](https://pypy.org/): once warmed up, MicroPython and QuickJS run 1.5 to 2 times as fast there as on CPython, and Micro QuickJS a little slower.
 
 ### Sandbox, WASI and setjmp/longjmp
 
@@ -312,7 +312,7 @@ pwasm can also translate a WebAssembly function into Python source code (`codege
 
 `instantiate()` takes a `mode`:
 
-- `"auto"` (the default) interprets each function until it has been called twice, then compiles it - code that only runs once is not worth compiling
+- `"auto"` (the default) interprets each function until it has been called twice, then compiles it - code that only runs once is not worth compiling. On PyPy, functions of more than 8,000 instructions stay in the interpreter (`pwasm.executor.AUTO_MAX_SIZE`): PyPy's JIT handles pwasm's interpreter loop well but huge generated functions badly, and QuickJS's compiled interpreter loop ran 15 times slower there
 - `"compile"` compiles every function to Python on its first call
 - `"interpret"` never compiles
 

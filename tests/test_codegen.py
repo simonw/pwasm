@@ -640,6 +640,26 @@ def test_disk_cache_can_be_turned_off(tmp_path, monkeypatch):
     assert cached_files(tmp_path) == []
 
 
+def test_auto_mode_can_leave_large_functions_to_the_interpreter(monkeypatch):
+    import pwasm.executor
+
+    # PyPy runs huge generated functions slowly (see AUTO_MAX_SIZE)
+    monkeypatch.setattr(pwasm.executor, "AUTO_MAX_SIZE", 6)
+    inst = load(
+        """(module
+          (func (export "small") (param i32) (result i32) (local.get 0))
+          (func (export "large") (param i32) (result i32)
+            (i32.add (i32.add (i32.add (local.get 0) (i32.const 1))
+                              (i32.const 2)) (i32.const 3))))""",
+        mode="auto",
+    )
+    for _ in range(3):
+        assert inst.exports.small(1) == 1
+        assert inst.exports.large(1) == 7
+    assert inst.functions[0].pyfunc is not None
+    assert inst.functions[1].pyfunc is None
+
+
 def test_auto_mode_uses_cached_code_on_first_call():
     module = decode_module(wat2wasm(ADD))
     first = instantiate(module, mode="auto")
