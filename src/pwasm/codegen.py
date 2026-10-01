@@ -1597,6 +1597,65 @@ class Translator:
         self.emit("break")
         self.indent -= 1
 
+    def read_before_set(self) -> set[int]:
+        """The locals that may be read before they are set (and so need to
+        start as zero): a forward pass tracking which locals are definitely
+        set on every path to each point."""
+        body = self.func.body
+        state: frozenset | None = frozenset(range(len(self.ftype.params)))
+        # [kind, state on entry, meet of the states of branches to its end,
+        # state at the end of the then arm]; None stands for unreachable
+        frames: list[list] = []
+        found: set[int] = set()
+
+        def meet(a: frozenset | None, b: frozenset | None) -> frozenset | None:
+            if a is None:
+                return b
+            return a if b is None else a & b
+
+        def branch(depth: int) -> None:
+            if depth < len(frames) and frames[-1 - depth][0] != "loop":
+                frame = frames[-1 - depth]
+                frame[2] = meet(frame[2], state)
+
+        for ins in body:
+            name = ins.opcode
+            if name == "local.get":
+                if state is not None and ins.operand not in state:
+                    found.add(ins.operand)
+            elif name in ("local.set", "local.tee"):
+                if state is not None:
+                    state = state | {ins.operand}
+            elif name in ("block", "loop", "if"):
+                frames.append([name, state, None, None])
+            elif name == "else":
+                frames[-1][3] = state
+                frames[-1][0] = "else"
+                state = frames[-1][1]
+            elif name == "end":
+                if not frames:
+                    break
+                kind, entry, branched, then_end = frames.pop()
+                if kind == "if":  # no else: the false case skips the then arm
+                    state = meet(state, entry)
+                elif kind == "else":
+                    state = meet(state, then_end)
+                if kind != "loop":
+                    state = meet(state, branched)
+            elif name == "br_if":
+                branch(ins.operand)
+            elif name == "br":
+                branch(ins.operand)
+                state = None
+            elif name == "br_table":
+                depths, default = ins.operand
+                for depth in set(depths) | {default}:
+                    branch(depth)
+                state = None
+            elif name in ("return", "unreachable"):
+                state = None
+        return found
+
     # --- output ---
 
     def assemble(self) -> str:
@@ -1604,8 +1663,10 @@ class Translator:
         n_params = len(self.ftype.params)
         out = [f"def {name}({', '.join(f'l{i}' for i in range(n_params))}):"]
         by_zero: dict[str, list[str]] = {}
+        uninitialized = self.read_before_set()
         for i, type in enumerate(self.local_types[n_params:], n_params):
-            by_zero.setdefault(ZERO_LITERAL[type], []).append(f"l{i}")
+            if i in uninitialized:
+                by_zero.setdefault(ZERO_LITERAL[type], []).append(f"l{i}")
         for zero, names in by_zero.items():
             for start in range(0, len(names), 50):
                 out.append(f"    {' = '.join(names[start:start + 50])} = {zero}")

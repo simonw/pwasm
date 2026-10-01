@@ -372,6 +372,36 @@ def test_br_table_indexes(monkeypatch, index, force):
     assert "t1 = l0" not in source
 
 
+# local 1 is always set before it is read; local 2 is read before it is set
+# when the parameter is 0; local 3 is only set on one path; local 4 is
+# skipped by a branch; local 5 is set at the start of every loop iteration
+LOCALS = """(module (func (export "f") (param i32) (result i32)
+  (local i32 i32 i32 i32 i32)
+  (local.set 1 (i32.const 7))
+  (if (local.get 0) (then (local.set 2 (i32.const 1))))
+  (local.set 2 (i32.add (local.get 2) (local.get 1)))
+  (if (i32.gt_u (local.get 0) (i32.const 1))
+    (then (local.set 3 (i32.const 100)))
+    (else (nop)))
+  (block $b
+    (br_if $b (i32.gt_u (local.get 0) (i32.const 2)))
+    (local.set 4 (i32.const 1000)))
+  (loop $l
+    (local.set 5 (i32.const 10000))
+    (br_if $l (i32.eqz (local.get 5))))
+  (i32.add (i32.add (local.get 2) (local.get 3))
+           (i32.add (local.get 4) (local.get 5)))))"""
+
+
+def test_only_locals_read_before_being_set_are_initialized():
+    inst = load(LOCALS)
+    assert [inst.exports.f(n) for n in range(4)] == [11007, 11008, 11108, 10108]
+    prologue = python_source(inst.functions[0]).split("try:")[0]
+    assert "l2" in prologue and "l3" in prologue and "l4" in prologue
+    assert "l1" not in prologue.replace("def f0(l0):", "")
+    assert "l5" not in prologue
+
+
 def test_deeply_nested_loops_use_a_state_machine():
     inst = load(nested_loops_module(25))
     assert inst.exports.f(10) == 10
