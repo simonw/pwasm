@@ -1,0 +1,663 @@
+"""Compile WebAssembly function bodies into flat code for the executor.
+
+Structured control flow is compiled away: `block`, `loop` and `end` emit
+nothing, and every branch becomes a jump to a precomputed instruction index.
+Because operand stack heights are static in valid WebAssembly, the compiler
+also knows exactly which values a branch has to discard, so the executor
+never keeps a label stack.
+
+Compiled code is two parallel lists: `ops` (internal opcodes, below) and
+`imms` (their immediates).
+"""
+
+from __future__ import annotations
+
+import math
+import operator
+import struct
+from typing import Any
+
+from . import numeric as num
+from .errors import TrapError, WasmError
+from .numeric import MASK_32, MASK_64
+from .runtime import ZERO, HostFunction
+
+# Internal opcodes. The executor tests the first group one by one (they are
+# the most frequent instructions in compiled C), then dispatches on ranges of
+# ten, so keep related rare opcodes together.
+(
+    LOCAL_GET,
+    CONST,
+    LOCAL_SET,
+    LOCAL_TEE,
+    I32_ADD,
+    I32_LOAD,
+    BR_IF,
+    I32_STORE,
+    CALL,
+    JMP,
+    # 10
+    I32_AND,
+    I32_EQZ,
+    I32_SHL,
+    I32_NE,
+    I32_SUB,
+    I32_EQ,
+    GLOBAL_GET,
+    GLOBAL_SET,
+    DROP,
+    IF_FALSE,
+    # 20
+    I32_LT_U,
+    I32_LT_S,
+    I32_GT_U,
+    I32_GT_S,
+    I32_LE_U,
+    I32_LE_S,
+    I32_GE_U,
+    I32_GE_S,
+    I32_OR,
+    I32_XOR,
+    # 30
+    I32_SHR_U,
+    I32_MUL,
+    SELECT,
+    RETURN,
+    JMP_DROP,
+    BR_IF_DROP,
+    BR_TABLE,
+    CALL0,
+    CALLN,
+    CALL_HOST,
+    # 40: memory
+    LOAD,
+    LOAD_MASK,
+    STORE,
+    STORE_RAW,
+    I32_LOAD8_U,
+    I32_STORE8,
+    LOAD_F32,
+    STORE_F32,
+    MEMORY_SIZE,
+    MEMORY_GROW,
+    # 50
+    BINOP,
+    UNOP,
+    UNREACHABLE,
+    RETURN_IF,
+    CALL_INDIRECT,
+    MISC,
+    TICK,
+) = range(57)
+
+# Opcodes whose failures (struct.error / IndexError) mean an out of bounds
+# memory access rather than a bug.
+MEMORY_OPS = frozenset(
+    {
+        I32_LOAD,
+        I32_STORE,
+        LOAD,
+        LOAD_MASK,
+        STORE,
+        STORE_RAW,
+        I32_LOAD8_U,
+        I32_STORE8,
+        LOAD_F32,
+        STORE_F32,
+    }
+)
+
+INLINE_BINOPS = {
+    "i32.add": I32_ADD,
+    "i32.sub": I32_SUB,
+    "i32.mul": I32_MUL,
+    "i32.and": I32_AND,
+    "i32.or": I32_OR,
+    "i32.xor": I32_XOR,
+    "i32.shl": I32_SHL,
+    "i32.shr_u": I32_SHR_U,
+    "i32.eq": I32_EQ,
+    "i32.ne": I32_NE,
+    "i32.lt_u": I32_LT_U,
+    "i32.lt_s": I32_LT_S,
+    "i32.gt_u": I32_GT_U,
+    "i32.gt_s": I32_GT_S,
+    "i32.le_u": I32_LE_U,
+    "i32.le_s": I32_LE_S,
+    "i32.ge_u": I32_GE_U,
+    "i32.ge_s": I32_GE_S,
+}
+
+INLINE_UNOPS = {
+    "i32.eqz": I32_EQZ,
+}
+
+# Binary and unary operations executed by calling a Python function.
+BINOP_FUNCS: dict[str, Any] = {
+    "i32.div_s": num.i32_div_s,
+    "i32.div_u": num.i32_div_u,
+    "i32.rem_s": num.i32_rem_s,
+    "i32.rem_u": num.i32_rem_u,
+    "i32.shr_s": num.i32_shr_s,
+    "i32.rotl": num.i32_rotl,
+    "i32.rotr": num.i32_rotr,
+    "i64.add": num.i64_add,
+    "i64.sub": num.i64_sub,
+    "i64.mul": num.i64_mul,
+    "i64.div_s": num.i64_div_s,
+    "i64.div_u": num.i64_div_u,
+    "i64.rem_s": num.i64_rem_s,
+    "i64.rem_u": num.i64_rem_u,
+    "i64.and": operator.and_,
+    "i64.or": operator.or_,
+    "i64.xor": operator.xor,
+    "i64.shl": num.i64_shl,
+    "i64.shr_s": num.i64_shr_s,
+    "i64.shr_u": num.i64_shr_u,
+    "i64.rotl": num.i64_rotl,
+    "i64.rotr": num.i64_rotr,
+    "i64.eq": operator.eq,
+    "i64.ne": operator.ne,
+    "i64.lt_u": operator.lt,
+    "i64.gt_u": operator.gt,
+    "i64.le_u": operator.le,
+    "i64.ge_u": operator.ge,
+    "i64.lt_s": num.i64_lt_s,
+    "i64.gt_s": num.i64_gt_s,
+    "i64.le_s": num.i64_le_s,
+    "i64.ge_s": num.i64_ge_s,
+    "f32.add": num.f32_add,
+    "f32.sub": num.f32_sub,
+    "f32.mul": num.f32_mul,
+    "f32.div": num.f32_div,
+    "f32.min": num.f32_min,
+    "f32.max": num.f32_max,
+    "f32.copysign": num.f32_copysign,
+    "f64.add": operator.add,
+    "f64.sub": operator.sub,
+    "f64.mul": operator.mul,
+    "f64.div": num.f64_div,
+    "f64.min": num.f64_min,
+    "f64.max": num.f64_max,
+    "f64.copysign": math.copysign,
+    # comparisons follow IEEE 754 in Python, including for NaN
+    "f32.eq": operator.eq,
+    "f32.ne": operator.ne,
+    "f32.lt": operator.lt,
+    "f32.gt": operator.gt,
+    "f32.le": operator.le,
+    "f32.ge": operator.ge,
+    "f64.eq": operator.eq,
+    "f64.ne": operator.ne,
+    "f64.lt": operator.lt,
+    "f64.gt": operator.gt,
+    "f64.le": operator.le,
+    "f64.ge": operator.ge,
+}
+
+UNOP_FUNCS: dict[str, Any] = {
+    "i32.clz": num.i32_clz,
+    "i32.ctz": num.i32_ctz,
+    "i32.popcnt": num.i32_popcnt,
+    "i32.extend8_s": num.i32_extend8_s,
+    "i32.extend16_s": num.i32_extend16_s,
+    "i32.wrap_i64": num.i32_wrap_i64,
+    "i64.extend_i32_s": num.i64_extend_i32_s,
+    "i64.clz": num.i64_clz,
+    "i64.ctz": num.i64_ctz,
+    "i64.popcnt": num.i32_popcnt,
+    "i64.eqz": num.i64_eqz,
+    "i64.extend8_s": num.i64_extend8_s,
+    "i64.extend16_s": num.i64_extend16_s,
+    "i64.extend32_s": num.i64_extend32_s,
+    "f32.abs": num.f32_abs,
+    "f32.neg": num.f32_neg,
+    "f32.sqrt": num.f32_sqrt,
+    # rounding an f32 value to an integer gives an f32 value
+    "f32.ceil": num.f64_ceil,
+    "f32.floor": num.f64_floor,
+    "f32.trunc": num.f64_trunc,
+    "f32.nearest": num.f64_nearest,
+    "f64.abs": math.fabs,
+    "f64.neg": operator.neg,
+    "f64.sqrt": num.f64_sqrt,
+    "f64.ceil": num.f64_ceil,
+    "f64.floor": num.f64_floor,
+    "f64.trunc": num.f64_trunc,
+    "f64.nearest": num.f64_nearest,
+    # conversions
+    "i32.trunc_f32_s": num.i32_trunc_s,
+    "i32.trunc_f32_u": num.i32_trunc_u,
+    "i32.trunc_f64_s": num.i32_trunc_s,
+    "i32.trunc_f64_u": num.i32_trunc_u,
+    "i64.trunc_f32_s": num.i64_trunc_s,
+    "i64.trunc_f32_u": num.i64_trunc_u,
+    "i64.trunc_f64_s": num.i64_trunc_s,
+    "i64.trunc_f64_u": num.i64_trunc_u,
+    "i32.trunc_sat_f32_s": num.i32_trunc_sat_s,
+    "i32.trunc_sat_f32_u": num.i32_trunc_sat_u,
+    "i32.trunc_sat_f64_s": num.i32_trunc_sat_s,
+    "i32.trunc_sat_f64_u": num.i32_trunc_sat_u,
+    "i64.trunc_sat_f32_s": num.i64_trunc_sat_s,
+    "i64.trunc_sat_f32_u": num.i64_trunc_sat_u,
+    "i64.trunc_sat_f64_s": num.i64_trunc_sat_s,
+    "i64.trunc_sat_f64_u": num.i64_trunc_sat_u,
+    "f32.convert_i32_s": num.f32_convert_i32_s,
+    "f32.convert_i32_u": num.f32_convert_i32_u,
+    "f32.convert_i64_s": num.f32_convert_i64_s,
+    "f32.convert_i64_u": num.f32_convert_i64_u,
+    "f64.convert_i32_s": num.f64_convert_i32_s,
+    "f64.convert_i32_u": num.f64_convert_u,
+    "f64.convert_i64_s": num.f64_convert_i64_s,
+    "f64.convert_i64_u": num.f64_convert_u,
+    "f32.demote_f64": num.f32_demote_f64,
+    "f64.promote_f32": num.f64_promote_f32,
+    "i32.reinterpret_f32": num.f32_to_bits,
+    "f32.reinterpret_i32": num.f32_from_bits,
+    "i64.reinterpret_f64": num.i64_reinterpret_f64,
+    "f64.reinterpret_i64": num.f64_reinterpret_i64,
+}
+
+# Instructions that leave the (internal representation of the) value alone
+IDENTITY_UNOPS = {"i64.extend_i32_u"}
+
+
+def _unpacker(fmt: str):
+    return struct.Struct(fmt).unpack_from
+
+
+def _packer(fmt: str):
+    return struct.Struct(fmt).pack_into
+
+
+# name -> (opcode, function building the immediate from the offset)
+LOADS: dict[str, tuple[int, Any]] = {
+    "i32.load": (I32_LOAD, lambda off: off),
+    "i32.load8_u": (I32_LOAD8_U, lambda off: off),
+    "i64.load8_u": (I32_LOAD8_U, lambda off: off),
+    "i32.load8_s": (LOAD_MASK, lambda off: (_unpacker("<b"), off, MASK_32)),
+    "i32.load16_s": (LOAD_MASK, lambda off: (_unpacker("<h"), off, MASK_32)),
+    "i32.load16_u": (LOAD, lambda off: (_unpacker("<H"), off)),
+    "i64.load": (LOAD, lambda off: (_unpacker("<Q"), off)),
+    "i64.load8_s": (LOAD_MASK, lambda off: (_unpacker("<b"), off, MASK_64)),
+    "i64.load16_s": (LOAD_MASK, lambda off: (_unpacker("<h"), off, MASK_64)),
+    "i64.load16_u": (LOAD, lambda off: (_unpacker("<H"), off)),
+    "i64.load32_s": (LOAD_MASK, lambda off: (_unpacker("<i"), off, MASK_64)),
+    "i64.load32_u": (LOAD, lambda off: (_unpacker("<I"), off)),
+    "f32.load": (LOAD_F32, lambda off: off),
+    "f64.load": (LOAD, lambda off: (_unpacker("<d"), off)),
+}
+
+STORES: dict[str, tuple[int, Any]] = {
+    "i32.store": (I32_STORE, lambda off: off),
+    "i32.store8": (I32_STORE8, lambda off: off),
+    "i64.store8": (I32_STORE8, lambda off: off),
+    "i32.store16": (STORE, lambda off: (_packer("<H"), off, 0xFFFF)),
+    "i64.store16": (STORE, lambda off: (_packer("<H"), off, 0xFFFF)),
+    "i64.store32": (STORE, lambda off: (_packer("<I"), off, MASK_32)),
+    "i64.store": (STORE_RAW, lambda off: (_packer("<Q"), off)),
+    "f32.store": (STORE_F32, lambda off: off),
+    "f64.store": (STORE_RAW, lambda off: (_packer("<d"), off)),
+}
+
+
+def _ref_is_null(v: Any) -> int:
+    return 1 if v is None else 0
+
+
+def _misc(name: str, arg: Any, instance: Any) -> tuple[Any, int, int]:
+    """(function, values popped, values pushed) for rarely used instructions
+    that the executor runs through its generic MISC opcode."""
+    if name.startswith("table.") or name == "elem.drop":
+        if name == "table.copy":
+            dst = instance.tables[arg[0]]
+            src = instance.tables[arg[1]]
+
+            def table_copy(d: int, s: int, n: int) -> None:
+                if s + n > len(src.elements) or d + n > len(dst.elements):
+                    raise TrapError("out of bounds table access")
+                dst.elements[d : d + n] = src.elements[s : s + n]
+
+            return table_copy, 3, 0
+        if name == "table.init":
+            seg, table = arg[0], instance.tables[arg[1]]
+
+            def table_init(d: int, s: int, n: int) -> None:
+                table.init(d, instance.elements[seg], s, n)
+
+            return table_init, 3, 0
+        if name == "elem.drop":
+
+            def elem_drop() -> None:
+                instance.elements[arg] = []
+
+            return elem_drop, 0, 0
+        table = instance.tables[arg]
+        if name == "table.get":
+            return table.get, 1, 1
+        if name == "table.set":
+            return table.set, 2, 0
+        if name == "table.size":
+            return (lambda: len(table.elements)), 0, 1
+        if name == "table.grow":
+            return (lambda init, n: table.grow(n, init) & MASK_32), 2, 1
+        if name == "table.fill":
+            return table.fill, 3, 0
+    if name in ("memory.fill", "memory.copy", "memory.init"):
+        mem = instance.memories[0].data
+        if name == "memory.fill":
+
+            def memory_fill(d: int, value: int, n: int) -> None:
+                if d + n > len(mem):
+                    raise TrapError("out of bounds memory access")
+                mem[d : d + n] = bytes((value & 0xFF,)) * n
+
+            return memory_fill, 3, 0
+        if name == "memory.copy":
+
+            def memory_copy(d: int, s: int, n: int) -> None:
+                if s + n > len(mem) or d + n > len(mem):
+                    raise TrapError("out of bounds memory access")
+                mem[d : d + n] = mem[s : s + n]
+
+            return memory_copy, 3, 0
+
+        def memory_init(d: int, s: int, n: int) -> None:
+            data = instance.datas[arg]
+            if s + n > len(data) or d + n > len(mem):
+                raise TrapError("out of bounds memory access")
+            mem[d : d + n] = data[s : s + n]
+
+        return memory_init, 3, 0
+    if name == "data.drop":
+
+        def data_drop() -> None:
+            instance.datas[arg] = b""
+
+        return data_drop, 0, 0
+    raise WasmError(f"Unsupported instruction: {name}")
+
+
+MISC_INSTRUCTIONS = {
+    "memory.fill",
+    "memory.copy",
+    "memory.init",
+    "data.drop",
+    "table.get",
+    "table.set",
+    "table.size",
+    "table.grow",
+    "table.fill",
+    "table.copy",
+    "table.init",
+    "elem.drop",
+}
+
+
+class Code:
+    """Compiled code for one function."""
+
+    __slots__ = ("ops", "imms", "zeros", "mem")
+
+    def __init__(self, ops: list, imms: list, zeros: list, mem: Any) -> None:
+        self.ops = ops
+        self.imms = imms
+        self.zeros = zeros
+        self.mem = mem
+
+
+class _Label:
+    """Compile-time control frame for block/loop/if and the function body."""
+
+    __slots__ = (
+        "kind",
+        "height",
+        "n_params",
+        "n_results",
+        "start",
+        "fixups",
+        "if_jump",
+    )
+
+    def __init__(
+        self, kind: str, height: int, n_params: int, n_results: int, start: int
+    ):
+        self.kind = kind
+        self.height = height  # operand stack height below the block's params
+        self.n_params = n_params
+        self.n_results = n_results
+        self.start = start  # loop: branch target
+        self.fixups: list = []  # forward branches to patch at `end`
+        self.if_jump: int | None = None  # index of the IF_FALSE to patch
+
+    @property
+    def arity(self) -> int:
+        return self.n_params if self.kind == "loop" else self.n_results
+
+
+def compile_function(wfunc: Any) -> Code:
+    instance = wfunc.instance
+    func = wfunc.func
+    types = instance.module.types
+    ops: list[int] = []
+    imms: list[Any] = []
+
+    def emit(op: int, imm: Any = None) -> None:
+        ops.append(op)
+        imms.append(imm)
+
+    def block_signature(blocktype: Any) -> tuple[int, int]:
+        if blocktype == ():
+            return 0, 0
+        if isinstance(blocktype, tuple):
+            return 0, len(blocktype)
+        t = types[blocktype]
+        return len(t.params), len(t.results)
+
+    labels = [_Label("func", 0, 0, wfunc.n_results, 0)]
+    height = 0
+    # With resource limits, charge a unit of fuel per call and per loop
+    # iteration (at loop headers, so every backward branch pays)
+    limits = instance.limits
+    if limits is not None:
+        emit(TICK, limits)
+    dead = False  # current code is unreachable (after br, return, ...)
+    skip = 0  # nesting depth of blocks inside dead code
+
+    def branch_target(label: _Label, entry: list | None = None) -> list:
+        """[target, drop_lo, drop_hi] for a branch from the current height.
+        Forward targets are patched when the label's `end` is reached."""
+        lo = label.height
+        hi = height - label.arity
+        target = label.start if label.kind == "loop" else None
+        entry = [target, lo, max(hi, lo)]
+        if target is None:
+            label.fixups.append(entry)
+        return entry
+
+    def emit_branch(label: _Label, conditional: bool) -> None:
+        if label.kind == "func":
+            emit(RETURN_IF if conditional else RETURN, label.n_results)
+            return
+        target, lo, hi = entry = branch_target(label)
+        if hi > lo:
+            emit(BR_IF_DROP if conditional else JMP_DROP, entry)
+        else:
+            if target is None:
+                label.fixups[-1] = len(ops)  # patch the imm itself
+            emit(BR_IF if conditional else JMP, target)
+
+    for instr in func.body:
+        name = instr.opcode
+        arg = instr.operand
+
+        if dead:
+            if name in ("block", "loop", "if"):
+                skip += 1
+                continue
+            if skip:
+                if name == "end":
+                    skip -= 1
+                continue
+            if name not in ("end", "else"):
+                continue
+
+        if name == "local.get":
+            emit(LOCAL_GET, arg)
+            height += 1
+        elif name == "i32.const":
+            emit(CONST, arg & MASK_32)
+            height += 1
+        elif name == "local.set":
+            emit(LOCAL_SET, arg)
+            height -= 1
+        elif name == "local.tee":
+            emit(LOCAL_TEE, arg)
+        elif name in INLINE_BINOPS:
+            emit(INLINE_BINOPS[name])
+            height -= 1
+        elif name in LOADS:
+            op, make_imm = LOADS[name]
+            emit(op, make_imm(arg[1]))
+        elif name in STORES:
+            op, make_imm = STORES[name]
+            emit(op, make_imm(arg[1]))
+            height -= 2
+        elif name == "br_if":
+            height -= 1
+            emit_branch(labels[-1 - arg], True)
+        elif name == "br":
+            emit_branch(labels[-1 - arg], False)
+            dead = True
+        elif name == "call":
+            callee = instance.functions[arg]
+            n_params = callee.n_params
+            n_results = callee.n_results
+            if isinstance(callee, HostFunction):
+                emit(CALL_HOST, callee)
+            elif n_results == 1:
+                emit(CALL, (callee, n_params))
+            elif n_results == 0:
+                emit(CALL0, (callee, n_params))
+            else:
+                emit(CALLN, (callee, n_params))
+            height += n_results - n_params
+        elif name == "block":
+            n_params, n_results = block_signature(arg)
+            labels.append(_Label("block", height - n_params, n_params, n_results, 0))
+        elif name == "loop":
+            n_params, n_results = block_signature(arg)
+            labels.append(
+                _Label("loop", height - n_params, n_params, n_results, len(ops))
+            )
+            if limits is not None:
+                emit(TICK, limits)
+        elif name == "if":
+            height -= 1
+            n_params, n_results = block_signature(arg)
+            label = _Label("if", height - n_params, n_params, n_results, 0)
+            label.if_jump = len(ops)
+            emit(IF_FALSE, None)
+            labels.append(label)
+        elif name == "else":
+            label = labels[-1]
+            if not dead:
+                emit(JMP, None)
+                label.fixups.append(len(ops) - 1)
+            imms[label.if_jump] = len(ops)
+            label.if_jump = None
+            height = label.height + label.n_params
+            dead = False
+        elif name == "end":
+            label = labels.pop()
+            height = label.height + label.n_results
+            dead = False
+            if label.kind == "func":
+                end = len(ops)
+                emit(RETURN, label.n_results)
+            else:
+                end = len(ops)
+            if label.if_jump is not None:
+                imms[label.if_jump] = end
+            for fixup in label.fixups:
+                if isinstance(fixup, int):
+                    imms[fixup] = end
+                else:
+                    fixup[0] = end
+            if label.kind == "func":
+                break
+        elif name == "i64.const":
+            emit(CONST, arg & MASK_64)
+            height += 1
+        elif name in ("f32.const", "f64.const"):
+            emit(CONST, arg if name == "f32.const" else float(arg))
+            height += 1
+        elif name in INLINE_UNOPS:
+            emit(INLINE_UNOPS[name])
+        elif name in BINOP_FUNCS:
+            emit(BINOP, BINOP_FUNCS[name])
+            height -= 1
+        elif name in UNOP_FUNCS:
+            emit(UNOP, UNOP_FUNCS[name])
+        elif name in IDENTITY_UNOPS:
+            pass
+        elif name == "global.get":
+            emit(GLOBAL_GET, instance.globals[arg])
+            height += 1
+        elif name == "global.set":
+            emit(GLOBAL_SET, instance.globals[arg])
+            height -= 1
+        elif name == "drop":
+            emit(DROP)
+            height -= 1
+        elif name in ("select", "select_t"):
+            emit(SELECT)
+            height -= 2
+        elif name == "br_table":
+            height -= 1
+            depths, default = arg
+            entries = []
+            for depth in list(depths) + [default]:
+                label = labels[-1 - depth]
+                if label.kind == "func":
+                    entries.append(None)
+                else:
+                    entries.append(branch_target(label))
+            emit(BR_TABLE, (entries[:-1], entries[-1]))
+            dead = True
+        elif name == "return":
+            emit(RETURN, wfunc.n_results)
+            dead = True
+        elif name == "unreachable":
+            emit(UNREACHABLE)
+            dead = True
+        elif name == "call_indirect":
+            ftype = types[arg[0]]
+            emit(CALL_INDIRECT, (instance.tables[arg[1]], ftype))
+            height += len(ftype.results) - len(ftype.params) - 1
+        elif name == "ref.null":
+            emit(CONST, None)
+            height += 1
+        elif name == "ref.func":
+            emit(CONST, instance.functions[arg])
+            height += 1
+        elif name == "ref.is_null":
+            emit(UNOP, _ref_is_null)
+        elif name in MISC_INSTRUCTIONS:
+            misc = _misc(name, arg, instance)
+            emit(MISC, misc)
+            height += misc[2] - misc[1]
+        elif name == "memory.size":
+            emit(MEMORY_SIZE)
+            height += 1
+        elif name == "memory.grow":
+            emit(MEMORY_GROW, instance.memories[0])
+        elif name == "nop":
+            pass
+        else:
+            raise WasmError(f"Unsupported instruction: {name}")
+
+    zeros = [ZERO[t] for t in func.locals]
+    memories = instance.memories
+    mem = memories[0].data if memories else None
+    return Code(ops, imms, zeros, mem)

@@ -39,11 +39,11 @@ def profile_with_line_stats():
     stats.print_stats(20)
     print(s.getvalue())
 
-    # Print callers for execute_function
-    print("\n--- Callers of execute_function ---")
+    # Print callers for execute
+    print("\n--- Callers of execute ---")
     s = StringIO()
     stats = pstats.Stats(profiler, stream=s)
-    stats.print_callers("execute_function")
+    stats.print_callers("execute")
     print(s.getvalue())
 
     print("\n" + "=" * 70)
@@ -100,12 +100,12 @@ def measure_overhead():
     # Measure wrapper overhead
     iterations = 10000
 
-    # Direct execute_function call
-    from pwasm.executor import execute_function
+    # Direct execute call
+    from pwasm.executor import execute
 
     start = time.perf_counter()
     for _ in range(iterations):
-        execute_function(instance, 0, [30])
+        execute(instance.functions[0], [30])
     direct_time = time.perf_counter() - start
 
     # Via wrapper
@@ -114,7 +114,7 @@ def measure_overhead():
         instance.exports.fib(30)
     wrapper_time = time.perf_counter() - start
 
-    print(f"Direct execute_function: {direct_time:.4f}s")
+    print(f"Direct execute:          {direct_time:.4f}s")
     print(f"Via exports wrapper:     {wrapper_time:.4f}s")
     print(
         f"Wrapper overhead:        {(wrapper_time - direct_time) / iterations * 1000000:.2f}µs per call"
@@ -237,32 +237,28 @@ def profile_instruction_frequency():
     print("INSTRUCTION FREQUENCY ANALYSIS")
     print("=" * 70)
 
-    # Patch execute_function to count instructions
+    # Patch execute to count (static) instructions per call
     from pwasm import executor
 
     instruction_counts = {}
-    original_execute = executor.execute_function
+    original_execute = executor.execute
 
-    def counting_execute(instance, func_idx, args):
-        func = instance.funcs[func_idx]
-        body = func.body
-
-        for instr in body:
+    def counting_execute(func, args):
+        for instr in func.func.body:
             op = instr.opcode
             instruction_counts[op] = instruction_counts.get(op, 0) + 1
-
-        return original_execute(instance, func_idx, args)
+        return original_execute(func, args)
 
     # Run fibonacci
     module = decode_module(FIB_WASM)
     instance = instantiate(module)
 
-    executor.execute_function = counting_execute
-
-    for _ in range(100):
-        instance.exports.fib(20)
-
-    executor.execute_function = original_execute
+    executor.execute = counting_execute
+    try:
+        for _ in range(100):
+            instance.exports.fib(20)
+    finally:
+        executor.execute = original_execute
 
     print("\nFibonacci instruction frequency (static count x 100 calls):")
     for op, count in sorted(instruction_counts.items(), key=lambda x: -x[1])[:15]:

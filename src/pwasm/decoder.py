@@ -1,5 +1,6 @@
 """WebAssembly binary format decoder."""
 
+import hashlib
 import struct
 from typing import BinaryIO
 from pathlib import Path
@@ -23,6 +24,7 @@ from .types import (
     EXPORT_KIND_ENCODING,
 )
 from . import opcodes
+from .numeric import f32_from_bits
 
 # WASM magic number and version
 WASM_MAGIC = b"\x00asm"
@@ -162,6 +164,11 @@ def decode_instruction(reader: BinaryReader) -> Instruction:
     """Decode a single instruction."""
     opcode = reader.read_byte()
 
+    if opcode == opcodes.PREFIX_FC:
+        return decode_fc_instruction(reader)
+    if opcode == opcodes.PREFIX_SIMD:
+        raise DecodeError("SIMD instructions (0xFD prefix) are not supported")
+
     # Get opcode name
     if opcode not in opcodes.OPCODE_NAMES:
         raise DecodeError(f"Unknown opcode: 0x{opcode:02x}")
@@ -185,7 +192,7 @@ def decode_instruction(reader: BinaryReader) -> Instruction:
 
     if opcode in opcodes.F32_IMMEDIATE:
         data = reader.read_bytes(4)
-        operand = struct.unpack("<f", data)[0]
+        operand = f32_from_bits(int.from_bytes(data, "little"))
         return Instruction(name, operand)
 
     if opcode in opcodes.F64_IMMEDIATE:
@@ -232,6 +239,33 @@ def decode_instruction(reader: BinaryReader) -> Instruction:
     raise DecodeError(f"Unhandled opcode: 0x{opcode:02x} ({name})")
 
 
+def decode_fc_instruction(reader: BinaryReader) -> Instruction:
+    """Decode an instruction with the 0xFC prefix (after the prefix)."""
+    sub = decode_unsigned_leb128(reader)
+    name = opcodes.FC_OPCODE_NAMES.get(sub)
+    if name is None:
+        raise DecodeError(f"Unknown opcode: 0xfc {sub}")
+    if sub <= 7:  # saturating truncation
+        return Instruction(name)
+    if sub == 8:  # memory.init dataidx memidx
+        data_idx = decode_unsigned_leb128(reader)
+        decode_unsigned_leb128(reader)
+        return Instruction(name, data_idx)
+    if sub in (9, 13, 15, 16, 17):  # data.drop, elem.drop, table.grow/size/fill
+        return Instruction(name, decode_unsigned_leb128(reader))
+    if sub == 10:  # memory.copy dst_mem src_mem
+        decode_unsigned_leb128(reader)
+        decode_unsigned_leb128(reader)
+        return Instruction(name)
+    if sub == 11:  # memory.fill mem
+        decode_unsigned_leb128(reader)
+        return Instruction(name)
+    # table.init elemidx tableidx, table.copy dst src
+    first = decode_unsigned_leb128(reader)
+    second = decode_unsigned_leb128(reader)
+    return Instruction(name, (first, second))
+
+
 def decode_expr(reader: BinaryReader) -> list[Instruction]:
     """Decode an expression (instruction sequence ending with END)."""
     instructions = []
@@ -251,6 +285,15 @@ def decode_expr(reader: BinaryReader) -> list[Instruction]:
     return instructions
 
 
+def decode_body(code: bytes) -> list[Instruction]:
+    """Decode the instructions of a function body (after its locals)."""
+    reader = BinaryReader(code)
+    body = decode_expr(reader)
+    if not reader.eof():
+        raise DecodeError("Unexpected bytes after end of function body")
+    return body
+
+
 def decode_func_type(reader: BinaryReader) -> FuncType:
     """Decode a function type."""
     marker = reader.read_byte()
@@ -265,7 +308,13 @@ def decode_func_type(reader: BinaryReader) -> FuncType:
     result_count = decode_unsigned_leb128(reader)
     results = tuple(decode_valtype(reader) for _ in range(result_count))
 
-    return FuncType(params, results)
+    # Intern types so that equal signatures are usually the same object,
+    # which makes call_indirect's signature check an identity test
+    func_type = FuncType(params, results)
+    return _FUNC_TYPES.setdefault(func_type, func_type)
+
+
+_FUNC_TYPES: dict[FuncType, FuncType] = {}
 
 
 def decode_type_section(reader: BinaryReader, module: Module) -> None:
@@ -356,34 +405,45 @@ def decode_start_section(reader: BinaryReader, module: Module) -> None:
 
 
 def decode_element_section(reader: BinaryReader, module: Module) -> None:
-    """Decode the element section."""
+    """Decode the element section (all eight segment encodings)."""
     count = decode_unsigned_leb128(reader)
     for _ in range(count):
-        # Simple active element segment (MVP)
         flags = decode_unsigned_leb128(reader)
-
-        if flags == 0:
-            # Active segment for table 0
-            offset = decode_expr(reader)
-            func_count = decode_unsigned_leb128(reader)
-            func_indices = [decode_unsigned_leb128(reader) for _ in range(func_count)]
-            module.elem.append(Element(0, offset, func_indices))
-        else:
-            # More complex element segment types (post-MVP)
+        if flags > 7:
             raise DecodeError(f"Unsupported element segment flags: {flags}")
+        uses_exprs = flags & 4
+        table_idx = 0
+        offset: list[Instruction] = []
+        if flags & 1:
+            mode = "declarative" if flags & 2 else "passive"
+        else:
+            mode = "active"
+            if flags & 2:
+                table_idx = decode_unsigned_leb128(reader)
+            offset = decode_expr(reader)
+        elem_type = "funcref"
+        if flags & 3:
+            if uses_exprs:
+                elem_type = decode_valtype(reader)
+            elif reader.read_byte() != 0x00:
+                raise DecodeError("Unsupported element kind")
+        n = decode_unsigned_leb128(reader)
+        if uses_exprs:
+            init: list = [decode_expr(reader) for _ in range(n)]
+        else:
+            init = [decode_unsigned_leb128(reader) for _ in range(n)]
+        module.elem.append(Element(table_idx, offset, init, mode, elem_type))
 
 
 def decode_code_section(reader: BinaryReader, module: Module) -> None:
     """Decode the code section."""
     count = decode_unsigned_leb128(reader)
+    type_indices = getattr(module, "_func_type_indices", [])
 
-    if not hasattr(module, "_func_type_indices"):
-        raise DecodeError("Code section without function section")
-
-    if count != len(module._func_type_indices):
+    if count != len(type_indices):
         raise DecodeError(
-            f"Code section count ({count}) != function section count "
-            f"({len(module._func_type_indices)})"
+            f"function and code section have inconsistent lengths: code section "
+            f"count ({count}) != function section count ({len(type_indices)})"
         )
 
     for i in range(count):
@@ -398,21 +458,17 @@ def decode_code_section(reader: BinaryReader, module: Module) -> None:
             valtype = decode_valtype(reader)
             locals_list.extend([valtype] * n)
 
-        # Instructions
-        body = decode_expr(reader)
-
-        # Verify we consumed exactly body_size bytes
+        # Instructions are decoded lazily, see Function.body
         consumed = reader.position - body_start
-        if consumed != body_size:
-            raise DecodeError(
-                f"Function body size mismatch: expected {body_size}, got {consumed}"
-            )
+        if consumed > body_size:
+            raise DecodeError("Function locals overrun the function body")
+        code = reader.read_bytes(body_size - consumed)
 
         module.funcs.append(
             Function(
-                type_idx=module._func_type_indices[i],
+                type_idx=type_indices[i],
                 locals=tuple(locals_list),
-                body=body,
+                code=code,
             )
         )
 
@@ -487,11 +543,12 @@ def decode_section(reader: BinaryReader, module: Module) -> None:
         raise DecodeError(f"Unknown section id: {section_id}")
 
 
-def decode_module(source: bytes | BinaryIO | Path) -> Module:
+def decode_module(source: bytes | bytearray | memoryview | BinaryIO | Path) -> Module:
     """Decode a WebAssembly module from binary format.
 
     Args:
-        source: WASM bytes, file-like object, or path to .wasm file
+        source: WASM bytes (any bytes-like object), file-like object, or path
+            to a .wasm file
 
     Returns:
         Decoded Module object
@@ -502,8 +559,8 @@ def decode_module(source: bytes | BinaryIO | Path) -> Module:
     # Handle different source types
     if isinstance(source, Path):
         data = source.read_bytes()
-    elif isinstance(source, bytes):
-        data = source
+    elif isinstance(source, (bytes, bytearray, memoryview)):
+        data = bytes(source)
     else:
         # Assume file-like object
         data = source.read()
@@ -529,4 +586,8 @@ def decode_module(source: bytes | BinaryIO | Path) -> Module:
     while not reader.eof():
         decode_section(reader, module)
 
+    if len(getattr(module, "_func_type_indices", [])) != len(module.funcs):
+        raise DecodeError("function and code section have inconsistent lengths")
+
+    module.digest = hashlib.sha256(data).hexdigest()
     return module

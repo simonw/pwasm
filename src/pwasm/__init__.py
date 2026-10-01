@@ -9,7 +9,15 @@ from .decoder import (
     decode_unsigned_leb128,
     decode_signed_leb128,
 )
-from .errors import WasmError, DecodeError, ValidationError, TrapError, LinkError
+from .errors import (
+    WasmError,
+    DecodeError,
+    ValidationError,
+    TrapError,
+    LinkError,
+    OutOfFuel,
+    Timeout,
+)
 from .types import Module, FuncType, Function, Export, Import, Instruction
 from .executor import instantiate, Instance
 
@@ -37,6 +45,8 @@ __all__ = [
     "ValidationError",
     "TrapError",
     "LinkError",
+    "OutOfFuel",
+    "Timeout",
 ]
 
 

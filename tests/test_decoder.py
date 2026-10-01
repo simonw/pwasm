@@ -372,3 +372,60 @@ class TestDecodeInstructions:
         func = module.funcs[0]
         assert func.body[0].opcode == "local.get"
         assert func.body[0].operand == 0
+
+
+class TestDecodeSources:
+    """decode_module() accepts any bytes-like object."""
+
+    MINIMAL = b"\x00asm\x01\x00\x00\x00"
+
+    def test_bytearray(self):
+        module = decode_module(bytearray(self.MINIMAL))
+        assert module.funcs == []
+
+    def test_memoryview(self):
+        module = decode_module(memoryview(self.MINIMAL))
+        assert module.funcs == []
+
+
+class TestPrefixedInstructions:
+    def test_fc_prefixed_instructions(self):
+        from pwasm.decoder import decode_body
+
+        # i32.trunc_sat_f32_s, memory.copy 0 0, memory.fill 0, table.init 3 1, end
+        body = decode_body(
+            bytes([0xFC, 0x00, 0xFC, 0x0A, 0, 0, 0xFC, 0x0B, 0, 0xFC, 0x0C, 3, 1, 0x0B])
+        )
+        assert [(i.opcode, i.operand) for i in body] == [
+            ("i32.trunc_sat_f32_s", None),
+            ("memory.copy", None),
+            ("memory.fill", None),
+            ("table.init", (3, 1)),
+            ("end", None),
+        ]
+
+    def test_simd_is_rejected(self):
+        from pwasm.decoder import decode_body
+
+        with pytest.raises(DecodeError, match="SIMD"):
+            decode_body(bytes([0xFD, 0x0C]))
+
+
+class TestSectionConsistency:
+    def test_empty_code_section_without_function_section(self):
+        module = decode_module(b"\x00asm\x01\x00\x00\x00" + bytes([0x0A, 0x01, 0x00]))
+        assert module.funcs == []
+
+    def test_code_section_without_function_section_is_an_error(self):
+        with pytest.raises(DecodeError, match="inconsistent"):
+            decode_module(
+                b"\x00asm\x01\x00\x00\x00" + bytes([0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B])
+            )
+
+    def test_function_section_without_code_section_is_an_error(self):
+        # type section: () -> (), function section: one function of type 0
+        wasm = b"\x00asm\x01\x00\x00\x00" + bytes(
+            [0x01, 0x04, 0x01, 0x60, 0x00, 0x00, 0x03, 0x02, 0x01, 0x00]
+        )
+        with pytest.raises(DecodeError, match="inconsistent"):
+            decode_module(wasm)

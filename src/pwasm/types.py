@@ -98,13 +98,38 @@ class Instruction:
         return self.opcode
 
 
-@dataclass
 class Function:
-    """A WebAssembly function (decoded from module)."""
+    """A WebAssembly function defined in a module.
 
-    type_idx: int
-    locals: tuple[ValType, ...]
-    body: list[Instruction]
+    The instruction list is decoded from the raw code bytes on first access,
+    so large modules only pay for decoding the functions they use.
+    """
+
+    __slots__ = ("type_idx", "locals", "code", "_body")
+
+    def __init__(
+        self,
+        type_idx: int,
+        locals: tuple[ValType, ...],
+        body: list[Instruction] | None = None,
+        *,
+        code: bytes | None = None,
+    ) -> None:
+        self.type_idx = type_idx
+        self.locals = locals
+        self.code = code
+        self._body = body
+
+    @property
+    def body(self) -> list[Instruction]:
+        if self._body is None:
+            from .decoder import decode_body
+
+            self._body = decode_body(self.code)
+        return self._body
+
+    def __repr__(self) -> str:
+        return f"Function(type_idx={self.type_idx}, locals={self.locals!r})"
 
 
 @dataclass
@@ -155,7 +180,9 @@ class Element:
 
     table_idx: int
     offset: list[Instruction]
-    init: list[int]  # Function indices
+    init: list  # function indices, or constant expressions
+    mode: str = "active"  # "active", "passive" or "declarative"
+    elem_type: ValType = "funcref"
 
 
 @dataclass
@@ -193,3 +220,5 @@ class Module:
         self.start = None
         self.elem = []
         self.data = []
+        # SHA-256 (hex) of the binary the module was decoded from
+        self.digest: str | None = None

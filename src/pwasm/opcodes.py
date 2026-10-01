@@ -620,3 +620,29 @@ BLOCK_TYPE = {
     LOOP,
     IF,
 }
+
+# Instructions with the 0xFC prefix, followed by a u32 sub-opcode
+# (saturating truncation, bulk memory and table instructions)
+PREFIX_FC = 0xFC
+PREFIX_SIMD = 0xFD
+
+FC_OPCODE_NAMES = {
+    0: "i32.trunc_sat_f32_s",
+    1: "i32.trunc_sat_f32_u",
+    2: "i32.trunc_sat_f64_s",
+    3: "i32.trunc_sat_f64_u",
+    4: "i64.trunc_sat_f32_s",
+    5: "i64.trunc_sat_f32_u",
+    6: "i64.trunc_sat_f64_s",
+    7: "i64.trunc_sat_f64_u",
+    8: "memory.init",
+    9: "data.drop",
+    10: "memory.copy",
+    11: "memory.fill",
+    12: "table.init",
+    13: "elem.drop",
+    14: "table.copy",
+    15: "table.grow",
+    16: "table.size",
+    17: "table.fill",
+}

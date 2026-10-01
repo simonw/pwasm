@@ -63,48 +63,48 @@
 - [x] Execute `br` (unconditional branch)
 - [x] Execute `br_if` (conditional branch)
 - [x] Execute `br_table` (branch table)
-- [ ] Handle multi-value block results
+- [x] Handle multi-value block results
 
 ## Milestone 5: i64 and Integer Conversions
 *Goal: Complete integer support*
 
 - [x] Implement i64 value type (parsing and `i64.const` work)
-- [ ] Execute all i64 arithmetic operations (like i32)
-- [ ] Execute `i32.wrap_i64`
-- [ ] Execute `i64.extend_i32_s`, `i64.extend_i32_u`
-- [ ] Execute `i32.extend8_s`, `i32.extend16_s`
-- [ ] Execute `i64.extend8_s`, `i64.extend16_s`, `i64.extend32_s`
+- [x] Execute all i64 arithmetic operations (like i32)
+- [x] Execute `i32.wrap_i64`
+- [x] Execute `i64.extend_i32_s`, `i64.extend_i32_u`
+- [x] Execute `i32.extend8_s`, `i32.extend16_s`
+- [x] Execute `i64.extend8_s`, `i64.extend16_s`, `i64.extend32_s`
 
 ## Milestone 6: Floating Point
 *Goal: IEEE 754 float support*
 
 - [x] Implement f32 and f64 value types with proper bit representation
 - [x] Execute `f32.const`, `f64.const`
-- [ ] Execute `f32.add`, `f32.sub`, `f32.mul`, `f32.div` (and f64 variants)
-- [ ] Execute `f32.abs`, `f32.neg`, `f32.sqrt`
-- [ ] Execute `f32.ceil`, `f32.floor`, `f32.trunc`, `f32.nearest`
-- [ ] Execute `f32.min`, `f32.max`
-- [ ] Execute `f32.copysign`
-- [ ] Execute all f32 comparison ops
-- [ ] Execute all f64 operations (mirrors f32)
-- [ ] Execute integer-float conversions (i32/i64 <-> f32/f64)
-- [ ] Execute `f32.reinterpret_i32`, `f64.reinterpret_i64`
-- [ ] Execute `i32.reinterpret_f32`, `i64.reinterpret_f64`
-- [ ] Handle NaN canonicalization
+- [x] Execute `f32.add`, `f32.sub`, `f32.mul`, `f32.div` (and f64 variants)
+- [x] Execute `f32.abs`, `f32.neg`, `f32.sqrt`
+- [x] Execute `f32.ceil`, `f32.floor`, `f32.trunc`, `f32.nearest`
+- [x] Execute `f32.min`, `f32.max`
+- [x] Execute `f32.copysign`
+- [x] Execute all f32 comparison ops
+- [x] Execute all f64 operations (mirrors f32)
+- [x] Execute integer-float conversions (i32/i64 <-> f32/f64)
+- [x] Execute `f32.reinterpret_i32`, `f64.reinterpret_i64`
+- [x] Execute `i32.reinterpret_f32`, `i64.reinterpret_f64`
+- [x] Handle NaN canonicalization
 
 ## Milestone 7: Linear Memory
 *Goal: Load/store operations with memory*
 
 - [x] Implement MemoryInstance with bytearray storage
-- [ ] Implement little-endian load/store helpers
-- [ ] Execute `memory.size`, `memory.grow`
-- [ ] Execute `i32.load`, `i32.load8_s`, `i32.load8_u`, `i32.load16_s`, `i32.load16_u`
-- [ ] Execute `i64.load`, `i64.load8_s`, `i64.load8_u`, `i64.load16_s`, `i64.load16_u`, `i64.load32_s`, `i64.load32_u`
-- [ ] Execute `f32.load`, `f64.load`
-- [ ] Execute `i32.store`, `i32.store8`, `i32.store16`
-- [ ] Execute `i64.store`, `i64.store8`, `i64.store16`, `i64.store32`
-- [ ] Execute `f32.store`, `f64.store`
-- [ ] Implement memory bounds checking (trap on out-of-bounds)
+- [x] Implement little-endian load/store helpers
+- [x] Execute `memory.size`, `memory.grow`
+- [x] Execute `i32.load`, `i32.load8_s`, `i32.load8_u`, `i32.load16_s`, `i32.load16_u`
+- [x] Execute `i64.load`, `i64.load8_s`, `i64.load8_u`, `i64.load16_s`, `i64.load16_u`, `i64.load32_s`, `i64.load32_u`
+- [x] Execute `f32.load`, `f64.load`
+- [x] Execute `i32.store`, `i32.store8`, `i32.store16`
+- [x] Execute `i64.store`, `i64.store8`, `i64.store16`, `i64.store32`
+- [x] Execute `f32.store`, `f64.store`
+- [x] Implement memory bounds checking (trap on out-of-bounds)
 - [x] Initialize memory from data segments
 
 ## Milestone 8: Globals
@@ -118,21 +118,21 @@
 ## Milestone 9: Tables and Indirect Calls
 *Goal: Function pointers via tables*
 
-- [ ] Implement TableInstance (parsing works, runtime not implemented)
-- [ ] Initialize tables from element segments (parsing works, runtime not implemented)
-- [ ] Execute `call_indirect`
-- [ ] Validate indirect call type signatures
-- [ ] Execute `table.get`, `table.set` (if targeting reference types)
-- [ ] Execute `table.size`, `table.grow` (if targeting reference types)
+- [x] Implement TableInstance
+- [x] Initialize tables from element segments
+- [x] Execute `call_indirect`
+- [x] Validate indirect call type signatures
+- [x] Execute `table.get`, `table.set` (if targeting reference types)
+- [x] Execute `table.size`, `table.grow` (if targeting reference types)
 
 ## Milestone 10: Imports and Exports
 *Goal: Module linking and Python interop*
 
-- [ ] Implement import resolution (parsing works, resolution not implemented)
-- [ ] Support imported functions (Python callables)
-- [ ] Support imported memories
-- [ ] Support imported globals
-- [ ] Support imported tables
+- [x] Implement import resolution
+- [x] Support imported functions (Python callables)
+- [x] Support imported memories
+- [x] Support imported globals
+- [x] Support imported tables
 - [x] Implement export namespace
 - [x] Create Pythonic export accessors
 
@@ -145,7 +145,7 @@
 - [ ] Validate memory and table indices
 - [ ] Validate global mutability in contexts
 - [ ] Validate start function signature
-- [ ] Validate import/export matching
+- [x] Validate import/export matching
 
 ## Milestone 12: Public API Polish
 *Goal: User-friendly Python interface*
@@ -153,7 +153,7 @@
 - [x] Implement `decode_module()` from bytes/file/path
 - [ ] Implement `validate()` as standalone function
 - [x] Implement `instantiate()` with imports dict (basic version exists)
-- [ ] Add memory read/write helpers for Python
+- [x] Add memory read/write helpers for Python
 - [x] Add type annotations throughout
 - [ ] Write comprehensive docstrings
 - [ ] Create usage examples
@@ -161,120 +161,122 @@
 ## Milestone 13: WAST Test Runner
 *Goal: Run official spec tests*
 
-- [ ] Implement WAST S-expression parser
-- [ ] Handle `(module ...)` declarations
-- [ ] Handle `(assert_return ...)` tests
-- [ ] Handle `(assert_trap ...)` tests
-- [ ] Handle `(assert_invalid ...)` tests
-- [ ] Handle `(assert_malformed ...)` tests
-- [ ] Handle `(invoke ...)` commands
-- [ ] Handle `(register ...)` for module linking
+`tests/spec_runner.py` runs the vendored `wg-2.0` core tests in `tests/spec/`, compiling module text with `wasmtime.wat2wasm`.
+
+- [x] Implement WAST S-expression parser
+- [x] Handle `(module ...)` declarations
+- [x] Handle `(assert_return ...)` tests
+- [x] Handle `(assert_trap ...)` tests
+- [ ] Handle `(assert_invalid ...)` tests (skipped: no validator)
+- [ ] Handle `(assert_malformed ...)` tests (skipped)
+- [x] Handle `(invoke ...)` commands
+- [x] Handle `(register ...)` for module linking
 
 ## Milestone 14: Spec Test Compliance
 *Goal: Pass official test suite*
 
 **Core Integer Tests:**
-- [ ] Pass `i32.wast`
-- [ ] Pass `i64.wast`
-- [ ] Pass `int_literals.wast`
-- [ ] Pass `int_exprs.wast`
+- [x] Pass `i32.wast`
+- [x] Pass `i64.wast`
+- [x] Pass `int_literals.wast`
+- [x] Pass `int_exprs.wast`
 
 **Control Flow Tests:**
-- [ ] Pass `block.wast`
-- [ ] Pass `loop.wast`
-- [ ] Pass `if.wast`
-- [ ] Pass `br.wast`
-- [ ] Pass `br_if.wast`
-- [ ] Pass `br_table.wast`
-- [ ] Pass `return.wast`
-- [ ] Pass `unreachable.wast`
-- [ ] Pass `nop.wast`
+- [x] Pass `block.wast`
+- [x] Pass `loop.wast`
+- [x] Pass `if.wast`
+- [x] Pass `br.wast`
+- [x] Pass `br_if.wast`
+- [x] Pass `br_table.wast`
+- [x] Pass `return.wast`
+- [x] Pass `unreachable.wast`
+- [x] Pass `nop.wast`
 
 **Function Tests:**
-- [ ] Pass `func.wast`
-- [ ] Pass `call.wast`
-- [ ] Pass `call_indirect.wast`
-- [ ] Pass `fac.wast` (factorial)
+- [x] Pass `func.wast`
+- [x] Pass `call.wast`
+- [x] Pass `call_indirect.wast`
+- [x] Pass `fac.wast` (factorial)
 
 **Variable Tests:**
-- [ ] Pass `local_get.wast`
-- [ ] Pass `local_set.wast`
-- [ ] Pass `local_tee.wast`
-- [ ] Pass `global.wast`
+- [x] Pass `local_get.wast`
+- [x] Pass `local_set.wast`
+- [x] Pass `local_tee.wast`
+- [x] Pass `global.wast`
 
 **Memory Tests:**
-- [ ] Pass `memory.wast`
-- [ ] Pass `memory_size.wast`
-- [ ] Pass `memory_grow.wast`
-- [ ] Pass `memory_trap.wast`
-- [ ] Pass `address.wast`
-- [ ] Pass `align.wast`
-- [ ] Pass `load.wast`
-- [ ] Pass `store.wast`
-- [ ] Pass `endianness.wast`
+- [x] Pass `memory.wast`
+- [x] Pass `memory_size.wast`
+- [x] Pass `memory_grow.wast`
+- [x] Pass `memory_trap.wast`
+- [x] Pass `address.wast`
+- [x] Pass `align.wast`
+- [x] Pass `load.wast`
+- [x] Pass `store.wast`
+- [x] Pass `endianness.wast`
 
 **Table Tests:**
-- [ ] Pass `table.wast`
-- [ ] Pass `elem.wast`
-- [ ] Pass `func_ptrs.wast`
+- [x] Pass `table.wast`
+- [x] Pass `elem.wast`
+- [x] Pass `func_ptrs.wast`
 
 **Float Tests:**
-- [ ] Pass `f32.wast`
-- [ ] Pass `f64.wast`
-- [ ] Pass `f32_cmp.wast`
-- [ ] Pass `f64_cmp.wast`
-- [ ] Pass `f32_bitwise.wast`
-- [ ] Pass `f64_bitwise.wast`
-- [ ] Pass `float_literals.wast`
-- [ ] Pass `float_exprs.wast`
-- [ ] Pass `float_misc.wast`
-- [ ] Pass `float_memory.wast`
-- [ ] Pass `conversions.wast`
+- [x] Pass `f32.wast`
+- [x] Pass `f64.wast`
+- [x] Pass `f32_cmp.wast`
+- [x] Pass `f64_cmp.wast`
+- [x] Pass `f32_bitwise.wast`
+- [x] Pass `f64_bitwise.wast`
+- [x] Pass `float_literals.wast`
+- [x] Pass `float_exprs.wast`
+- [x] Pass `float_misc.wast`
+- [x] Pass `float_memory.wast`
+- [x] Pass `conversions.wast`
 
 **Validation Tests:**
-- [ ] Pass `type.wast`
-- [ ] Pass `exports.wast`
-- [ ] Pass `imports.wast`
-- [ ] Pass `data.wast`
-- [ ] Pass `start.wast`
-- [ ] Pass `binary.wast`
-- [ ] Pass `binary-leb128.wast`
-- [ ] Pass `custom.wast`
+- [x] Pass `type.wast`
+- [x] Pass `exports.wast`
+- [x] Pass `imports.wast`
+- [x] Pass `data.wast`
+- [x] Pass `start.wast`
+- [x] Pass `binary.wast`
+- [x] Pass `binary-leb128.wast`
+- [x] Pass `custom.wast`
 
 **Miscellaneous Tests:**
-- [ ] Pass `select.wast`
-- [ ] Pass `stack.wast`
-- [ ] Pass `traps.wast`
-- [ ] Pass `unwind.wast`
-- [ ] Pass `labels.wast`
-- [ ] Pass `forward.wast`
-- [ ] Pass `names.wast`
-- [ ] Pass `comments.wast`
-- [ ] Pass `token.wast`
-- [ ] Pass `const.wast`
-- [ ] Pass `switch.wast`
-- [ ] Pass `left-to-right.wast`
-- [ ] Pass `linking.wast`
+- [x] Pass `select.wast`
+- [x] Pass `stack.wast`
+- [x] Pass `traps.wast`
+- [x] Pass `unwind.wast`
+- [x] Pass `labels.wast`
+- [x] Pass `forward.wast`
+- [x] Pass `names.wast`
+- [x] Pass `comments.wast`
+- [x] Pass `token.wast`
+- [x] Pass `const.wast`
+- [x] Pass `switch.wast`
+- [x] Pass `left-to-right.wast`
+- [x] Pass `linking.wast`
 
-## Current Focus: Milestones 5-7
+## Milestone 15: Running Real Programs
+*Goal: Run interpreters compiled from C*
 
-Milestones 1-4 are complete (binary parsing, core types, i32 interpreter, control flow).
-Milestone 8 (globals) is complete.
+- [x] WASI preview1 subset (`pwasm.wasi.WasiLite`)
+- [x] Emscripten-style setjmp/longjmp (`pwasm.emscripten.EmscriptenSjLj`)
+- [x] Resource limits: fuel, deadlines, memory caps (`pwasm.runtime.Limits`)
+- [x] `pwasm.sandbox.Sandbox` for loading and calling guests
+- [x] MicroPython guest
+- [x] QuickJS (quickjs-ng) guest
+- [x] Micro QuickJS guest
+
+## Current Focus: Performance
+
+Milestones 1-10, 13 and 15 are complete, and every non-SIMD WebAssembly
+2.0 core spec test passes (tests/spec, 25,000+ assertions; assert_invalid
+and assert_malformed are skipped because there is no validator yet).
 
 Next priorities:
-- Milestone 5: i64 arithmetic operations
-- Milestone 6: Floating point operations
-- Milestone 7: Linear memory (load/store operations)
-
-This allows running more complex WASM modules that use 64-bit integers, floating point math, and memory.
-
-Example of current capabilities:
-```python
-from pwasm import decode_module
-from pwasm.executor import instantiate
-
-# Can already do: i32 arithmetic, control flow, globals, function calls
-module = decode_module(wasm_bytes)
-instance = instantiate(module)
-assert instance.exports.add(2, 3) == 5
-```
+- Speed: super-instructions for hot patterns in compiled C, and
+  compiling hot functions to Python source
+- Share compiled code between instances of the same module
+- Milestone 11: Validation

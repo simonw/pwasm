@@ -24,4 +24,5 @@ build-backend = "uv_build"
 dev = [
     "pytest>=9.0.2",
     "black",
+    "wasmtime>=49.0.0",
 ]
